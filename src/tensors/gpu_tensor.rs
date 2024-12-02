@@ -14,8 +14,8 @@ use super::{
     ActivationType, GpuNum, GpuVec, PipelineType,
 };
 
-pub struct GpuTensor {
-    data: GpuVec<f32>,
+pub struct GpuTensor<T: GpuNum> {
+    data: GpuVec<T>,
     shape: [usize; 2],
 }
 
@@ -35,11 +35,11 @@ impl MatrixMulIndexes {
     }
 }
 
-impl GpuTensor {
-    pub fn new(data: &[impl AsRef<[f32]>]) -> Self {
+impl<T: GpuNum> GpuTensor<T> {
+    pub fn new(data: &[impl AsRef<[T]>]) -> Self {
         Self::new_with(data, BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST)
     }
-    pub fn new_with(data: &[impl AsRef<[f32]>], usage: BufferUsages) -> Self {
+    pub fn new_with(data: &[impl AsRef<[T]>], usage: BufferUsages) -> Self {
         let x = data.len();
         let mut y = None;
 
@@ -65,11 +65,11 @@ impl GpuTensor {
     pub fn empty_with(shape: [usize; 2], usage: BufferUsages) -> Self {
         assert!(shape[0] > 0 && shape[1] > 0, "shape must be greater than 0");
         let size = shape[0] * shape[1];
-        let data = GpuVec::with_usage(&vec![0.0; size], usage);
+        let data = GpuVec::empty_with_usage(size, usage);
         Self { data, shape }
     }
 
-    pub fn get_array(&self) -> Vec<Vec<f32>> {
+    pub fn get_array(&self) -> Vec<Vec<T>> {
         let data = self.data.to_cpu(..);
         data.chunks_exact(self.shape[1]).map(|c| c.to_vec()).collect()
     }
@@ -80,7 +80,9 @@ impl GpuTensor {
     pub fn len(&self) -> usize {
         self.shape[0] * self.shape[1]
     }
+}
 
+impl GpuTensor<f32> {
     pub fn matrix_mul(&self, other: &Self) -> Self {
         assert!(
             self.shape[1] == other.shape[0],
@@ -201,9 +203,9 @@ impl GpuTensor {
     }
 }
 
-impl Debug for GpuTensor {
+impl<T: GpuNum + Copy> Debug for GpuTensor<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "GpuTensor [")?;
+        writeln!(f, "GpuTensor<{}>[", T::num_type().gpu_type())?;
         let array = self.get_array();
         for row in array {
             writeln!(f, "    {row:?},")?;

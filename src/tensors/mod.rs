@@ -1,5 +1,7 @@
 mod cpu_tensor;
+mod elementwise;
 mod flow_functions;
+mod gpu_num;
 mod gpu_tensor;
 mod gpu_vec;
 mod pipelines;
@@ -12,7 +14,9 @@ use std::{
 
 use bytemuck::Pod;
 pub use cpu_tensor::*;
+pub use elementwise::*;
 pub use flow_functions::*;
+pub use gpu_num::*;
 pub use gpu_tensor::*;
 pub use gpu_vec::*;
 pub use pipelines::*;

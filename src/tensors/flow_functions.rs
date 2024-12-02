@@ -1,69 +1,7 @@
 use core::panic;
-use std::{collections::HashSet, fmt::Display, ops::*};
+use std::{any::Any, collections::HashSet, fmt::Display, ops::*};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum NumType {
-    F32,
-    I32,
-    U32,
-}
-
-impl NumType {
-    pub const ALL: [NumType; 3] = [NumType::F32, NumType::I32, NumType::U32];
-    const fn gpu_type(self) -> &'static str {
-        match self {
-            NumType::F32 => "f32",
-            NumType::I32 => "i32",
-            NumType::U32 => "u32",
-        }
-    }
-}
-
-trait Sealed {}
-
-#[allow(private_bounds)]
-pub trait GpuNum: std::fmt::Debug + Display + Sealed + Send + Sync + 'static {
-    fn flow_const(&self) -> FlowFunc;
-    fn num_type(&self) -> NumType;
-    fn as_f32(&self) -> f32 {
-        self.flow_const().const_as_f32()
-    }
-    fn as_i32(&self) -> i32 {
-        self.flow_const().const_as_i32()
-    }
-    fn as_u32(&self) -> u32 {
-        self.flow_const().const_as_u32()
-    }
-}
-
-impl Sealed for f32 {}
-impl Sealed for i32 {}
-impl Sealed for u32 {}
-
-impl GpuNum for f32 {
-    fn flow_const(&self) -> FlowFunc {
-        FlowFunc::ConstF32(HashF32(*self))
-    }
-    fn num_type(&self) -> NumType {
-        NumType::F32
-    }
-}
-impl GpuNum for i32 {
-    fn flow_const(&self) -> FlowFunc {
-        FlowFunc::ConstI32(*self)
-    }
-    fn num_type(&self) -> NumType {
-        NumType::I32
-    }
-}
-impl GpuNum for u32 {
-    fn flow_const(&self) -> FlowFunc {
-        FlowFunc::ConstU32(*self)
-    }
-    fn num_type(&self) -> NumType {
-        NumType::U32
-    }
-}
+use super::{AnyGpuNum, GpuNum, GpuTensor, NumType};
 
 // webgpu builtin functions https://webgpufundamentals.org/webgpu/lessons/webgpu-wgsl-function-reference.html
 #[allow(private_interfaces)]
@@ -99,28 +37,28 @@ pub enum FlowFunc {
 
 impl FlowFunc {
     const MAX_DEPTH: u8 = 255;
-    pub fn eval_one(&self, arg: impl GpuNum) -> Box<dyn GpuNum> {
-        self.eval_any(&[Box::new(arg)])
+    pub fn eval_one(&self, arg: impl GpuNum) -> AnyGpuNum {
+        self.eval_any(&[arg.as_any()])
     }
-    pub fn eval_two(&self, arg1: impl GpuNum, arg2: impl GpuNum) -> Box<dyn GpuNum> {
-        self.eval_any(&[Box::new(arg1), Box::new(arg2)])
+    pub fn eval_two(&self, arg1: impl GpuNum, arg2: impl GpuNum) -> AnyGpuNum {
+        self.eval_any(&[arg1.as_any(), arg2.as_any()])
     }
-    pub fn eval_three(&self, arg1: impl GpuNum, arg2: impl GpuNum, arg3: impl GpuNum) -> Box<dyn GpuNum> {
-        self.eval_any(&[Box::new(arg1), Box::new(arg2), Box::new(arg3)])
+    pub fn eval_three(&self, arg1: impl GpuNum, arg2: impl GpuNum, arg3: impl GpuNum) -> AnyGpuNum {
+        self.eval_any(&[arg1.as_any(), arg2.as_any(), arg3.as_any()])
     }
 
     pub fn new_const(val: impl GpuNum) -> Self {
-        val.flow_const()
+        val.as_any().flow_const()
     }
 
-    pub fn eval_any(&self, args: &[Box<dyn GpuNum>]) -> Box<dyn GpuNum> {
+    pub fn eval_any(&self, args: &[AnyGpuNum]) -> AnyGpuNum {
         let args = args.iter().map(|arg| arg.flow_const()).collect::<Vec<_>>();
         let mut func = self.clone();
         func.visit_args_replace(&args);
         match func.eval_const(Self::MAX_DEPTH) {
-            Self::ConstF32(f) => Box::new(f.0),
-            Self::ConstI32(i) => Box::new(i),
-            Self::ConstU32(u) => Box::new(u),
+            Self::ConstF32(f) => AnyGpuNum::F32(f.0),
+            Self::ConstI32(i) => AnyGpuNum::I32(i),
+            Self::ConstU32(u) => AnyGpuNum::U32(u),
             _ => panic!("eval error, not constant folded"),
         }
     }
@@ -374,7 +312,7 @@ impl FlowFunc {
 }
 
 #[derive(Copy, Clone)]
-struct HashF32(f32);
+pub(super) struct HashF32(pub f32);
 impl std::hash::Hash for HashF32 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.to_bits().hash(state);
