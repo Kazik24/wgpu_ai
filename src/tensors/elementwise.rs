@@ -30,30 +30,36 @@ macro_rules! impl_elementwise_op {
     };
 }
 
+macro_rules! impl_elementwise_op_gen {
+    (@ mut $gen:ident) => {&mut GpuTensor<$gen>};
+    (@ const $gen:ident) => {&GpuTensor<$gen>};
+    ($($mutable:ident $gen:ident),* : $arg:expr) => {
+        impl<$($gen: GpuNum),*, RETURN: GpuNum> ElementwiseOp<RETURN> for ($(impl_elementwise_op!(@ $mutable $gen)),*) {
+            const RETURN_ARG: Option<u8> = $arg;
+
+            #[allow(non_snake_case)]
+            fn arguments(&self) -> Vec<AnyGpuTensorRef> {
+                let ($($gen),*) = self;
+                let array = [$($gen.as_ref()),*];
+                array.to_vec()
+            }
+        }
+    };
+}
+
 // producing new tensor
-impl_elementwise_op!(const A, const B : None, f32);
-impl_elementwise_op!(const A, const B : None, u32);
-impl_elementwise_op!(const A, const B : None, i32);
-impl_elementwise_op!(const A, const B, const C : None, f32);
-impl_elementwise_op!(const A, const B, const C : None, u32);
-impl_elementwise_op!(const A, const B, const C : None, i32);
-impl_elementwise_op!(const A, const B, const C, const D : None, f32);
-impl_elementwise_op!(const A, const B, const C, const D : None, u32);
-impl_elementwise_op!(const A, const B, const C, const D : None, i32);
-impl_elementwise_op!(const A, const B, const C, const D, const E : None, f32);
-impl_elementwise_op!(const A, const B, const C, const D, const E : None, u32);
-impl_elementwise_op!(const A, const B, const C, const D, const E : None, i32);
-impl_elementwise_op!(const A, const B, const C, const D, const E, const F : None, f32);
-impl_elementwise_op!(const A, const B, const C, const D, const E, const F : None, u32);
-impl_elementwise_op!(const A, const B, const C, const D, const E, const F : None, i32);
-impl_elementwise_op!(const A, const B, const C, const D, const E, const F, const G : None, f32);
-impl_elementwise_op!(const A, const B, const C, const D, const E, const F, const G : None, u32);
-impl_elementwise_op!(const A, const B, const C, const D, const E, const F, const G : None, i32);
-impl_elementwise_op!(const A, const B, const C, const D, const E, const F, const G, const H : None, f32);
-impl_elementwise_op!(const A, const B, const C, const D, const E, const F, const G, const H : None, u32);
-impl_elementwise_op!(const A, const B, const C, const D, const E, const F, const G, const H : None, i32);
+impl_elementwise_op_gen!(const A : None);
+impl_elementwise_op_gen!(const A, const B : None);
+impl_elementwise_op_gen!(const A, const B, const C : None);
+impl_elementwise_op_gen!(const A, const B, const C, const D : None);
+impl_elementwise_op_gen!(const A, const B, const C, const D, const E : None);
+impl_elementwise_op_gen!(const A, const B, const C, const D, const E, const F : None);
+impl_elementwise_op_gen!(const A, const B, const C, const D, const E, const F, const G : None);
+impl_elementwise_op_gen!(const A, const B, const C, const D, const E, const F, const G, const H : None);
 
 // reusing existing tensor
+impl_elementwise_op!(mut A : Some(0));
+
 impl_elementwise_op!(mut A, const B : Some(0));
 impl_elementwise_op!(const A, mut B : Some(1));
 
@@ -65,6 +71,36 @@ impl_elementwise_op!(mut A, const B, const C, const D : Some(0));
 impl_elementwise_op!(const A, mut B, const C, const D : Some(1));
 impl_elementwise_op!(const A, const B, mut C, const D : Some(2));
 impl_elementwise_op!(const A, const B, const C, mut D : Some(3));
+
+impl_elementwise_op!(mut A, const B, const C, const D, const E : Some(0));
+impl_elementwise_op!(const A, mut B, const C, const D, const E : Some(1));
+impl_elementwise_op!(const A, const B, mut C, const D, const E : Some(2));
+impl_elementwise_op!(const A, const B, const C, mut D, const E : Some(3));
+impl_elementwise_op!(const A, const B, const C, const D, mut E : Some(4));
+
+impl_elementwise_op!(mut A, const B, const C, const D, const E, const F : Some(0));
+impl_elementwise_op!(const A, mut B, const C, const D, const E, const F : Some(1));
+impl_elementwise_op!(const A, const B, mut C, const D, const E, const F : Some(2));
+impl_elementwise_op!(const A, const B, const C, mut D, const E, const F : Some(3));
+impl_elementwise_op!(const A, const B, const C, const D, mut E, const F : Some(4));
+impl_elementwise_op!(const A, const B, const C, const D, const E, mut F : Some(5));
+
+impl_elementwise_op!(mut A, const B, const C, const D, const E, const F, const G : Some(0));
+impl_elementwise_op!(const A, mut B, const C, const D, const E, const F, const G : Some(1));
+impl_elementwise_op!(const A, const B, mut C, const D, const E, const F, const G : Some(2));
+impl_elementwise_op!(const A, const B, const C, mut D, const E, const F, const G : Some(3));
+impl_elementwise_op!(const A, const B, const C, const D, mut E, const F, const G : Some(4));
+impl_elementwise_op!(const A, const B, const C, const D, const E, mut F, const G : Some(5));
+impl_elementwise_op!(const A, const B, const C, const D, const E, const F, mut G : Some(6));
+
+impl_elementwise_op!(mut A, const B, const C, const D, const E, const F, const G, const H : Some(0));
+impl_elementwise_op!(const A, mut B, const C, const D, const E, const F, const G, const H : Some(1));
+impl_elementwise_op!(const A, const B, mut C, const D, const E, const F, const G, const H : Some(2));
+impl_elementwise_op!(const A, const B, const C, mut D, const E, const F, const G, const H : Some(3));
+impl_elementwise_op!(const A, const B, const C, const D, mut E, const F, const G, const H : Some(4));
+impl_elementwise_op!(const A, const B, const C, const D, const E, mut F, const G, const H : Some(5));
+impl_elementwise_op!(const A, const B, const C, const D, const E, const F, mut G, const H : Some(6));
+impl_elementwise_op!(const A, const B, const C, const D, const E, const F, const G, mut H : Some(7));
 
 pub fn op<T: GpuNum>(args: impl ElementwiseOp<T>, func: FlowFunc) -> GpuTensor<T> {
     let arg_tensors = args.arguments();

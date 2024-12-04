@@ -328,7 +328,7 @@ impl FlowFunc {
             Sqrt(a) => format!("sqrt({})", a.compile(var_names)),
             Tanh(a) => format!("tanh({})", a.compile(var_names)),
             Sigmoid(a) => format!("sigmoid_activation({})", a.compile(var_names)),
-            ReLU(a) => format!("max(0, {})", a.compile(var_names)),
+            ReLU(a) => format!("max(0.0, {})", a.compile(var_names)),
             SiLU(a) => format!("silu_activation({})", a.compile(var_names)),
             GeLU(a) => format!("gelu_activation({})", a.compile(var_names)),
         }

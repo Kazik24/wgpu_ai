@@ -11,8 +11,9 @@ use wgpu::*;
 use crate::tensors::wgpu_context::WgpuContext;
 
 use super::{
+    op, op_inplace,
     pipelines::{self, WorkgroupSize},
-    ActivationType, GpuNum, GpuVec, NumType, PipelineType,
+    ActivationType, FlowFunc, GpuNum, GpuVec, NumType, PipelineType,
 };
 
 pub enum AnyGpuTensor {
@@ -182,90 +183,57 @@ impl GpuTensor<f32> {
         tout
     }
 
-    pub fn activation_assign(&mut self, activation: ActivationType) {
-        let ctx = WgpuContext::get();
-        let pipeline = ctx.pipelines.get(
-            PipelineType::Activation {
-                gated: false,
-                activation,
-                in_place_first_arg: Some(true),
-            },
-            ctx.wg_1d(),
-        );
+    pub fn apply<R: GpuNum>(&self, func: FlowFunc) -> GpuTensor<R> {
+        op(self, func)
+    }
+    pub fn apply2<A: GpuNum, R: GpuNum>(&self, other: &GpuTensor<A>, func: FlowFunc) -> GpuTensor<R> {
+        op((self, other), func)
+    }
+    pub fn apply3<A: GpuNum, B: GpuNum, R: GpuNum>(&self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, func: FlowFunc) -> GpuTensor<R> {
+        op((self, other1, other2), func)
+    }
+    pub fn apply4<A: GpuNum, B: GpuNum, C: GpuNum, R: GpuNum>(
+        &self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, other3: &GpuTensor<C>, func: FlowFunc,
+    ) -> GpuTensor<R> {
+        op((self, other1, other2, other3), func)
+    }
+    pub fn apply_assign(&mut self, func: FlowFunc) {
+        op_inplace(self, func);
+    }
+    pub fn apply_assign2<A: GpuNum>(&mut self, other: &GpuTensor<A>, func: FlowFunc) {
+        op_inplace((self, other), func);
+    }
+    pub fn apply_assign3<A: GpuNum, B: GpuNum>(&mut self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, func: FlowFunc) {
+        op_inplace((self, other1, other2), func);
+    }
+    pub fn apply_assign4<A: GpuNum, B: GpuNum, C: GpuNum>(&mut self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, other3: &GpuTensor<C>, func: FlowFunc) {
+        op_inplace((self, other1, other2, other3), func);
+    }
 
-        let workgroup_x = (self.len() as f64 / ctx.wg_1d().x_size as f64).ceil() as u32;
-        ctx.dispatch_workgroup(&pipeline, &bind_entries([(0, self.data.rawr())]), workgroup_x, 1);
+    pub fn activation_assign(&mut self, activation: ActivationType) {
+        self.apply_assign(FlowFunc::Argument(0, NumType::F32).activation(activation));
     }
 
     pub fn gated_activation_assign(&mut self, activation: ActivationType, mul_activation_by_elementwise: &Self) {
         assert!(self.shape() == mul_activation_by_elementwise.shape(), "shapes must be equal");
-        let ctx = WgpuContext::get();
-        let pipeline = ctx.pipelines.get(
-            PipelineType::Activation {
-                gated: true,
-                activation,
-                in_place_first_arg: Some(true),
-            },
-            ctx.wg_1d(),
-        );
-
-        let workgroup_x = (self.len() as f64 / ctx.wg_1d().x_size as f64).ceil() as u32;
-        let entries = &bind_entries([(0, self.data.rawr()), (1, mul_activation_by_elementwise.data.rawr())]);
-        ctx.dispatch_workgroup(&pipeline, entries, workgroup_x, 1);
+        let func = FlowFunc::Argument(0, NumType::F32).activation(activation) * FlowFunc::Argument(1, NumType::F32);
+        self.apply_assign2(mul_activation_by_elementwise, func);
     }
 
     pub fn gated_activation_assign_other(&self, activation: ActivationType, mul_activation_by_elementwise: &mut Self) {
         assert!(self.shape() == mul_activation_by_elementwise.shape(), "shapes must be equal");
-        let ctx = WgpuContext::get();
-        let pipeline = ctx.pipelines.get(
-            PipelineType::Activation {
-                gated: true,
-                activation,
-                in_place_first_arg: Some(false),
-            },
-            ctx.wg_1d(),
-        );
-
-        let workgroup_x = (self.len() as f64 / ctx.wg_1d().x_size as f64).ceil() as u32;
-        let entries = &bind_entries([(0, self.data.rawr()), (1, mul_activation_by_elementwise.data.rawr())]);
-        ctx.dispatch_workgroup(&pipeline, entries, workgroup_x, 1);
+        let func = FlowFunc::Argument(0, NumType::F32).activation(activation) * FlowFunc::Argument(1, NumType::F32);
+        op_inplace((self, mul_activation_by_elementwise), func);
     }
 
-    pub fn activation(&self, activation: ActivationType) -> Self {
-        let ctx = WgpuContext::get();
-        let pipeline = ctx.pipelines.get(
-            PipelineType::Activation {
-                gated: false,
-                activation,
-                in_place_first_arg: None,
-            },
-            ctx.wg_1d(),
-        );
-
-        let workgroup_x = (self.len() as f64 / ctx.wg_1d().x_size as f64).ceil() as u32;
-        let out = Self::empty_with(self.shape(), BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST);
-        let entries = &bind_entries([(0, self.data.rawr()), (2, out.data.rawr())]);
-        ctx.dispatch_workgroup(&pipeline, entries, workgroup_x, 1);
-        out
+    pub fn activation(&self, activation: ActivationType) -> GpuTensor<f32> {
+        self.apply(FlowFunc::Argument(0, NumType::F32).activation(activation))
     }
 
-    pub fn gated_activation(&self, activation: ActivationType, mul_activation_by_elementwise: &Self) -> Self {
+    pub fn gated_activation(&self, activation: ActivationType, mul_activation_by_elementwise: &Self) -> GpuTensor<f32> {
         assert!(self.shape() == mul_activation_by_elementwise.shape(), "shapes must be equal");
-        let ctx = WgpuContext::get();
-        let pipeline = ctx.pipelines.get(
-            PipelineType::Activation {
-                gated: true,
-                activation,
-                in_place_first_arg: None,
-            },
-            ctx.wg_1d(),
-        );
-
-        let workgroup_x = (self.len() as f64 / ctx.wg_1d().x_size as f64).ceil() as u32;
-        let out = Self::empty_with(self.shape(), BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST);
-        let entries = &bind_entries([(0, self.data.rawr()), (1, mul_activation_by_elementwise.data.rawr()), (2, out.data.rawr())]);
-        ctx.dispatch_workgroup(&pipeline, entries, workgroup_x, 1);
-        out
+        let func = FlowFunc::Argument(0, NumType::F32).activation(activation) * FlowFunc::Argument(1, NumType::F32);
+        self.apply2(mul_activation_by_elementwise, func)
     }
 }
 

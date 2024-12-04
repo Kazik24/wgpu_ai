@@ -13,11 +13,6 @@ pub enum PipelineType {
         dot_accumulate_func: FlowFunc, //for elementwise multiply and add
         modify_func: FlowFunc,         //for writing values to output, e.g overwrite, or some_func(current, result)
     },
-    Activation {
-        gated: bool,
-        activation: ActivationType,
-        in_place_first_arg: Option<bool>,
-    },
     FunctionElementwise {
         func: FlowFunc,
         in_place_arg: Option<u8>,
@@ -33,15 +28,6 @@ pub enum ActivationType {
 }
 // webgpu builtin functions https://webgpufundamentals.org/webgpu/lessons/webgpu-wgsl-function-reference.html
 impl ActivationType {
-    fn shader_expression(&self) -> &'static str {
-        match self {
-            Self::SiLU => "val = silu_activation_f32(val);",
-            Self::ReLU => "val = max(0.0, val);",
-            Self::GeLU => "val = gelu_activation_f32(val);",
-            Self::Sigmoid => "val = sigmoid_activation_f32(val);",
-        }
-    }
-
     pub fn apply(&self, val: f32) -> f32 {
         match self {
             Self::SiLU => val * (1.0 / (1.0 + (-val).exp())),
@@ -96,16 +82,6 @@ impl PipelineRegistry {
             PipelineType::MatrixMul => {
                 let code = MATRIX_MUL_SHADER.replace("@pipeline_workgroup_size", &wg_attribute).into();
                 Self::compile_compute_pipeline(code, "matrix_mul_f32")
-            }
-            PipelineType::Activation {
-                gated,
-                activation,
-                in_place_first_arg,
-            } => {
-                let activation_expr = activation.shader_expression();
-                let entry_name = "activation_func";
-                let template = gated_activation_shader_template(*gated, *in_place_first_arg, activation_expr, "f32", entry_name);
-                Self::compile_compute_pipeline(template.replace("@pipeline_workgroup_size", &wg_attribute).into(), entry_name)
             }
             PipelineType::FunctionElementwise { func, in_place_arg } => {
                 let entry_name = "elementwise_func";
@@ -182,63 +158,6 @@ fn matrix_mul_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 "###;
 
-fn gated_activation_shader_template(
-    gated: bool,                      // if this is gated activation, gated means activation(in_a) * in_b, otherwise activation(in_a)
-    in_place_first_arg: Option<bool>, // if first argument should be modified in-place, None - create a new array, Some(true) - modify the first argument, Some(false) - modify second argument
-    activation_expr: &str, // expression of activation function, 'val' is the input value and result should be stored in it e.g `val = max(0.0, val);``
-    data_type: &str,       // data type of the inputs/output arrays, e.g. f32
-    entry_name: &str,
-) -> String {
-    const SILU_IN_PLACE_SHADER: &str = r###"
-@group(0) @binding(0) // activation argument
-var<storage, read_write> inout_a: array<@DATA_TYPE>;
-@group(0) @binding(1) // optional gate argument, multiplied with the result of activation
-var<storage, read_write> inout_b: array<@DATA_TYPE>;
-@group(0) @binding(2) // optional output if in-place is disabled
-var<storage, read_write> new_out: array<@DATA_TYPE>;
-
-fn silu_activation(val: f32) -> f32 {
-    return val / (1.0 + exp(-val));
-}
-fn gelu_activation(val: f32) -> f32 {
-    return val * 0.5 * (1.0 + tanh(0.7978845608028654 * (val + 0.044715 * val * val * val)));
-}
-fn sigmoid_activation(val: f32) -> f32 {
-    return 1.0 / (1.0 + exp(-val));
-}
-
-@compute
-@pipeline_workgroup_size
-fn #ENTRY_FUNC_NAME(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    if global_id.x > arrayLength(&inout_a) {
-        return;
-    }
-    var val = inout_a[global_id.x];
-    @ACTIVATION_EXPR
-    @GATED_EXPR
-}
-"###;
-
-    let gated_expr = match (gated, in_place_first_arg) {
-        (true, None) => "new_out[global_id.x] = val * inout_b[global_id.x];",
-        (false, None) => "new_out[global_id.x] = val;",
-        (true, Some(true)) => "inout_a[global_id.x] = val * inout_b[global_id.x];",
-        (false, Some(true)) => "inout_a[global_id.x] = val;",
-        (true, Some(false)) => "inout_b[global_id.x] = val * inout_b[global_id.x];",
-        (false, Some(false)) => "inout_b[global_id.x] = val;",
-    };
-
-    let value = SILU_IN_PLACE_SHADER
-        .replace("@GATED_EXPR", gated_expr)
-        .replace("@DATA_TYPE", data_type)
-        .replace("#ENTRY_FUNC_NAME", entry_name)
-        .replace("@ACTIVATION_EXPR", activation_expr);
-
-    // println!("value: {}", value.trim());
-
-    value
-}
-
 pub(super) const ELEMENTWISE_OUT_BIND_NUM: u32 = 33;
 fn elementwise_shader_template(args: [(NumType, bool, bool); 8], func_expr: String, entry_name: &str, out_arg: Option<u8>, out_type: NumType) -> String {
     const SHADER_CODE: &str = r###"
@@ -275,7 +194,7 @@ fn sigmoid_activation(val: f32) -> f32 {
 @compute
 @pipeline_workgroup_size
 fn #ENTRY_FUNC_NAME(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    if global_id.x > arrayLength(&inout1) { //inout1 should be always defined
+    if global_id.x > arrayLength(&inout0) { //inout0 should be always defined
         return;
     }
     @VAR_EXPR0
