@@ -8,9 +8,7 @@ use super::{AnyGpuTensor, AnyGpuTensorRef, FlowFunc, GpuNum, GpuTensor, NumType}
 pub trait ElementwiseOp<T> {
     const RETURN_ARG: Option<u8>;
 
-    fn arguments(&self) -> Vec<AnyGpuTensorRef> {
-        todo!()
-    }
+    fn arguments(&self) -> Vec<AnyGpuTensorRef>;
 }
 
 macro_rules! impl_elementwise_op {
@@ -106,10 +104,9 @@ pub fn op<T: GpuNum>(args: impl ElementwiseOp<T>, func: FlowFunc) -> GpuTensor<T
     let arg_tensors = args.arguments();
     let result = runtime_op_internal(&arg_tensors, None, func);
     let result = result.expect("expected new tensor function");
-    let ty = result.as_ref().num_type();
-    match result.cast() {
-        None => panic!("Wrong output type inferred, expected {:?}, got {ty:?}", T::num_type()),
-        Some(result) => result,
+    match result.try_cast() {
+        Err(ty) => panic!("Wrong output type inferred, expected {:?}, got {ty:?}", T::num_type()),
+        Ok(result) => result,
     }
 }
 

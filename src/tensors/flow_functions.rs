@@ -25,6 +25,7 @@ pub enum FlowFunc {
     Max(Box<Self>, Box<Self>),
     // unary ops
     Neg(Box<Self>),
+    Abs(Box<Self>),
     Exp(Box<Self>),
     Log(Box<Self>),
     Sqrt(Box<Self>),
@@ -112,8 +113,8 @@ impl FlowFunc {
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) => _ = (a.visit_args_replace(args), b.visit_args_replace(args)),
             Rem(a, b) => _ = (a.visit_args_replace(args), b.visit_args_replace(args)),
             Pow(a, b) | Min(a, b) | Max(a, b) => _ = (a.visit_args_replace(args), b.visit_args_replace(args)),
-            Neg(a) | Exp(a) | Log(a) | Sqrt(a) | Tanh(a) | Sigmoid(a) | ReLU(a) => a.visit_args_replace(args),
-            GeLU(a) | SiLU(a) => a.visit_args_replace(args),
+            Neg(a) | Abs(a) | Exp(a) | Log(a) | Sqrt(a) | Tanh(a) => a.visit_args_replace(args),
+            Sigmoid(a) | ReLU(a) | GeLU(a) | SiLU(a) => a.visit_args_replace(args),
         }
     }
 
@@ -164,6 +165,7 @@ impl FlowFunc {
             Pow(a, b) => Self::type_match(Self::type_match(a.eval_type(), b.eval_type()), NumType::F32),
             Min(a, b) | Max(a, b) => Self::type_match(a.eval_type(), b.eval_type()),
             ReLU(a) => a.eval_type(),
+            Abs(a) => a.eval_type(),
             Neg(a) => {
                 let t = a.eval_type();
                 assert!(matches!(t, NumType::F32 | NumType::I32), "neg only supports f32 or i32");
@@ -246,6 +248,12 @@ impl FlowFunc {
                 ConstI32(a) => ic(-a),
                 _ => panic!("types of neg do not match, must be F32 or I32"),
             },
+            Abs(a) => match a.eval_const(depth.saturating_sub(1)) {
+                ConstF32(a) => fc(a.0.abs()),
+                ConstI32(a) => ic(a.abs()),
+                ConstU32(a) => uc(a),
+                _ => panic!("types of relu do not match, must be F32 or I32 or U32"),
+            },
             Exp(a) => match a.eval_const(depth.saturating_sub(1)) {
                 ConstF32(a) => fc(a.0.exp()),
                 _ => panic!("types of exp do not match, must be F32"),
@@ -315,7 +323,7 @@ impl FlowFunc {
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) => _ = (a.fetch_arguments(args), b.fetch_arguments(args)),
             Rem(a, b) => _ = (a.fetch_arguments(args), b.fetch_arguments(args)),
             Pow(a, b) | Min(a, b) | Max(a, b) => _ = (a.fetch_arguments(args), b.fetch_arguments(args)),
-            Neg(a) | Exp(a) | Log(a) | Sqrt(a) | Tanh(a) => a.fetch_arguments(args),
+            Neg(a) | Abs(a) | Exp(a) | Log(a) | Sqrt(a) | Tanh(a) => a.fetch_arguments(args),
             Sigmoid(a) | ReLU(a) | GeLU(a) | SiLU(a) => a.fetch_arguments(args),
         }
     }
@@ -349,6 +357,7 @@ impl FlowFunc {
             Min(a, b) => format!("min({}, {})", a.compile(var_names), b.compile(var_names)),
             Max(a, b) => format!("max({}, {})", a.compile(var_names), b.compile(var_names)),
             Neg(a) => format!("(-{})", a.compile(var_names)),
+            Abs(a) => format!("abs({})", a.compile(var_names)),
             Exp(a) => format!("exp({})", a.compile(var_names)),
             Log(a) => format!("log({})", a.compile(var_names)),
             Sqrt(a) => format!("sqrt({})", a.compile(var_names)),

@@ -304,7 +304,7 @@ impl WgpuContext {
             "Using {:#?} {} with {:#?} backend (Env vars: WGPU_POWER_PREF (low|high), WGPU_ADAPTER_NAME, WGPU_BACKEND).",
             info.device_type, info.name, info.backend
         );
-        println!("limits: {lim:#?}");
+        //println!("limits: {lim:#?}");
 
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
         //  `features` being the available features.

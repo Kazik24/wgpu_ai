@@ -8,7 +8,7 @@ use super::{FlowFunc, NumType, WgpuContext};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum PipelineType {
-    MatrixMul,
+    MatrixMul(NumType, bool), //second param is if to add value to output matrix
     CustomMatrixMul {
         dot_accumulate_func: FlowFunc, //for elementwise multiply and add
         modify_func: FlowFunc,         //for writing values to output, e.g overwrite, or some_func(current, result)
@@ -79,9 +79,12 @@ impl PipelineRegistry {
     fn new_pipeline(ty: &PipelineType, workgroup_size: WorkgroupSize) -> wgpu::ComputePipeline {
         let wg_attribute = format!("@workgroup_size({}, {})", workgroup_size.x_size, workgroup_size.y_size);
         match ty {
-            PipelineType::MatrixMul => {
-                let code = MATRIX_MUL_SHADER.replace("@pipeline_workgroup_size", &wg_attribute).into();
-                Self::compile_compute_pipeline(code, "matrix_mul_f32")
+            PipelineType::MatrixMul(ty, add) => {
+                let mut code = MATRIX_MUL_SHADER.replacen("@pipeline_workgroup_size", &wg_attribute, 1);
+                code = code.replace("@DATA_TYPE", ty.gpu_type());
+                let operator = if *add { "+=" } else { "=" };
+                code = code.replacen("@OPERATOR", operator, 1);
+                Self::compile_compute_pipeline(code.into(), "matrix_mul")
             }
             PipelineType::FunctionElementwise { func, in_place_arg } => {
                 let entry_name = "elementwise_func";
@@ -138,13 +141,13 @@ const VAR_NAMES_MAX: &[&str] = &[
 
 const MATRIX_MUL_SHADER: &str = r###"
 @group(0) @binding(0)
-var<storage, read_write> input_a: array<f32>;
+var<storage, read_write> input_a: array<@DATA_TYPE>;
 @group(0) @binding(1)
-var<storage, read_write> input_b: array<f32>;
+var<storage, read_write> input_b: array<@DATA_TYPE>;
 @group(0) @binding(2)
 var<storage, read_write> indexes: MatrixMulIndexes;
 @group(0) @binding(3)
-var<storage, read_write> output: array<f32>;
+var<storage, read_write> output: array<@DATA_TYPE>;
 
 struct MatrixMulIndexes{
     out_rows: u32,
@@ -154,19 +157,19 @@ struct MatrixMulIndexes{
 
 @compute
 @pipeline_workgroup_size
-fn matrix_mul_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn matrix_mul(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = global_id.x;
     let y = global_id.y;
     if x >= indexes.out_rows || y >= indexes.out_cols {
         return;
     }
 
-    var sum = 0.0;
+    var sum = @DATA_TYPE(0);
     let a_offset = y * indexes.length;
     for(var i: u32 = 0; i < indexes.length; i++) {
         sum += input_a[a_offset + i] * input_b[x + i * indexes.out_cols];
     }
-    output[x + y * indexes.out_cols] = sum;
+    output[x + y * indexes.out_cols] @OPERATOR sum;
 }
 "###;
 

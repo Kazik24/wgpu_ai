@@ -32,18 +32,36 @@ pub enum AnyGpuTensorRef<'a> {
 impl AnyGpuTensor {
     pub(super) const fn as_ref(&self) -> AnyGpuTensorRef {
         match self {
-            AnyGpuTensor::F32(t) => AnyGpuTensorRef::F32(t),
-            AnyGpuTensor::I32(t) => AnyGpuTensorRef::I32(t),
-            AnyGpuTensor::U32(t) => AnyGpuTensorRef::U32(t),
+            Self::F32(t) => AnyGpuTensorRef::F32(t),
+            Self::I32(t) => AnyGpuTensorRef::I32(t),
+            Self::U32(t) => AnyGpuTensorRef::U32(t),
         }
     }
-    pub fn cast<T: GpuNum>(self) -> Option<GpuTensor<T>> {
+    pub fn shape(&self) -> [usize; 2] {
+        match self {
+            Self::F32(t) => t.shape,
+            Self::I32(t) => t.shape,
+            Self::U32(t) => t.shape,
+        }
+    }
+    pub fn num_type(&self) -> NumType {
+        match self {
+            Self::F32(_) => NumType::F32,
+            Self::I32(_) => NumType::I32,
+            Self::U32(_) => NumType::U32,
+        }
+    }
+    #[inline]
+    pub fn try_cast<T: GpuNum>(self) -> Result<GpuTensor<T>, NumType> {
         // SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
-        match (self, T::num_type()) {
-            (AnyGpuTensor::F32(t), NumType::F32) => Some(unsafe { transmute::<GpuTensor<f32>, GpuTensor<T>>(t) }),
-            (AnyGpuTensor::I32(t), NumType::I32) => Some(unsafe { transmute::<GpuTensor<i32>, GpuTensor<T>>(t) }),
-            (AnyGpuTensor::U32(t), NumType::U32) => Some(unsafe { transmute::<GpuTensor<u32>, GpuTensor<T>>(t) }),
-            _ => None,
+        // this match should be inlined at monomorphization to only one case
+        unsafe {
+            match (self, T::num_type()) {
+                (AnyGpuTensor::F32(t), NumType::F32) => Ok(transmute::<GpuTensor<f32>, GpuTensor<T>>(t)),
+                (AnyGpuTensor::I32(t), NumType::I32) => Ok(transmute::<GpuTensor<i32>, GpuTensor<T>>(t)),
+                (AnyGpuTensor::U32(t), NumType::U32) => Ok(transmute::<GpuTensor<u32>, GpuTensor<T>>(t)),
+                (val, _) => Err(val.num_type()),
+            }
         }
     }
 }
@@ -51,23 +69,23 @@ impl AnyGpuTensor {
 impl<'a> AnyGpuTensorRef<'a> {
     pub fn shape(&self) -> [usize; 2] {
         match self {
-            AnyGpuTensorRef::F32(t) => t.shape,
-            AnyGpuTensorRef::I32(t) => t.shape,
-            AnyGpuTensorRef::U32(t) => t.shape,
+            Self::F32(t) => t.shape,
+            Self::I32(t) => t.shape,
+            Self::U32(t) => t.shape,
         }
     }
     pub fn num_type(&self) -> NumType {
         match self {
-            AnyGpuTensorRef::F32(_) => NumType::F32,
-            AnyGpuTensorRef::I32(_) => NumType::I32,
-            AnyGpuTensorRef::U32(_) => NumType::U32,
+            Self::F32(_) => NumType::F32,
+            Self::I32(_) => NumType::I32,
+            Self::U32(_) => NumType::U32,
         }
     }
     pub(super) fn raw(&self) -> &'a wgpu::Buffer {
         match self {
-            AnyGpuTensorRef::F32(t) => t.data.rawr(),
-            AnyGpuTensorRef::I32(t) => t.data.rawr(),
-            AnyGpuTensorRef::U32(t) => t.data.rawr(),
+            Self::F32(t) => t.data.rawr(),
+            Self::I32(t) => t.data.rawr(),
+            Self::U32(t) => t.data.rawr(),
         }
     }
 }
@@ -140,20 +158,36 @@ impl<T: GpuNum> GpuTensor<T> {
         self.shape[0] * self.shape[1]
     }
 
+    pub fn copy_to(&self, dst: &mut GpuTensor<T>) {
+        assert!(self.shape() == dst.shape(), "tensors must be the same shape");
+        self.data.copy_to(&mut dst.data);
+    }
+    pub fn copy_from(&mut self, src: &GpuTensor<T>) {
+        src.copy_to(self);
+    }
+
+    #[inline]
     pub fn as_any(self) -> AnyGpuTensor {
         // SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
-        match T::num_type() {
-            NumType::F32 => AnyGpuTensor::F32(unsafe { transmute::<GpuTensor<T>, GpuTensor<f32>>(self) }),
-            NumType::I32 => AnyGpuTensor::I32(unsafe { transmute::<GpuTensor<T>, GpuTensor<i32>>(self) }),
-            NumType::U32 => AnyGpuTensor::U32(unsafe { transmute::<GpuTensor<T>, GpuTensor<u32>>(self) }),
+        // this match should be inlined at monomorphization to only one case
+        unsafe {
+            match T::num_type() {
+                NumType::F32 => AnyGpuTensor::F32(transmute::<GpuTensor<T>, GpuTensor<f32>>(self)),
+                NumType::I32 => AnyGpuTensor::I32(transmute::<GpuTensor<T>, GpuTensor<i32>>(self)),
+                NumType::U32 => AnyGpuTensor::U32(transmute::<GpuTensor<T>, GpuTensor<u32>>(self)),
+            }
         }
     }
+    #[inline]
     pub fn as_any_ref(&self) -> AnyGpuTensorRef {
-        //SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
-        match T::num_type() {
-            NumType::F32 => AnyGpuTensorRef::F32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<f32>>(self) }),
-            NumType::I32 => AnyGpuTensorRef::I32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<i32>>(self) }),
-            NumType::U32 => AnyGpuTensorRef::U32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<u32>>(self) }),
+        // SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
+        // this match should be inlined at monomorphization to only one case
+        unsafe {
+            match T::num_type() {
+                NumType::F32 => AnyGpuTensorRef::F32(transmute::<&GpuTensor<T>, &GpuTensor<f32>>(self)),
+                NumType::I32 => AnyGpuTensorRef::I32(transmute::<&GpuTensor<T>, &GpuTensor<i32>>(self)),
+                NumType::U32 => AnyGpuTensorRef::U32(transmute::<&GpuTensor<T>, &GpuTensor<u32>>(self)),
+            }
         }
     }
 
@@ -214,20 +248,42 @@ impl<T: GpuNum> GpuTensor<T> {
             * FlowFunc::Argument(1, T::num_type()).optimize_cast_to(NumType::F32);
         self.apply2(mul_activation_by_elementwise, func.optimize_cast_to(NumType::F32))
     }
-}
 
-impl GpuTensor<f32> {
     pub fn matrix_mul(&self, other: &Self) -> Self {
         assert!(
             self.shape[1] == other.shape[0],
             "width (shape[1]) of first tensor must be equal to height (shape[0]) of second tensor"
         );
-        Self::matrix_mul_native(self, other)
+        assert!(self.len() > 0 && other.len() > 0, "tensors must not be empty");
+
+        let mut tout = Self::empty([self.shape[0], other.shape[1]]);
+        Self::matrix_mul_native(self, other, &mut tout, false);
+        tout
     }
 
-    fn matrix_mul_native(value_a: &Self, value_b: &Self) -> Self {
+    pub fn matrix_mul_assign(&self, other: &Self, output: &mut Self) {
+        assert!(
+            self.shape[1] == other.shape[0],
+            "width (shape[1]) of first tensor must be equal to height (shape[0]) of second tensor"
+        );
+        assert!(self.len() > 0 && other.len() > 0, "tensors must not be empty");
+        assert!(output.shape() == [self.shape[0], other.shape[1]], "output shape does not match");
+        Self::matrix_mul_native(self, other, output, false);
+    }
+
+    pub fn matrix_mul_add(&self, other: &Self, output: &mut Self) {
+        assert!(
+            self.shape[1] == other.shape[0],
+            "width (shape[1]) of first tensor must be equal to height (shape[0]) of second tensor"
+        );
+        assert!(self.len() > 0 && other.len() > 0, "tensors must not be empty");
+        assert!(output.shape() == [self.shape[0], other.shape[1]], "output shape does not match");
+        Self::matrix_mul_native(self, other, output, true);
+    }
+
+    fn matrix_mul_native(value_a: &Self, value_b: &Self, tout: &mut Self, add: bool) {
         let ctx = WgpuContext::get();
-        let pipeline = ctx.pipelines.get(PipelineType::MatrixMul, ctx.wg_2d());
+        let pipeline = ctx.pipelines.get(PipelineType::MatrixMul(T::num_type(), add), ctx.wg_2d());
 
         let indexes = MatrixMulIndexes {
             out_rows: value_a.shape()[0] as u32,
@@ -239,20 +295,14 @@ impl GpuTensor<f32> {
         let workgroup_y = (indexes.out_rows as f64 / ctx.wg_2d().y_size as f64).ceil() as u32;
         let out_length = indexes.out_rows as usize * indexes.out_cols as usize;
         let indexes = GpuVec::with_usage(&indexes.as_array(), BufferUsages::STORAGE | BufferUsages::COPY_SRC);
-        let tout = Self::empty_with(
-            [value_a.shape[0], value_b.shape[1]],
-            BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
-        );
 
         let entries = &bind_entries([(0, value_a.data.rawr()), (1, value_b.data.rawr()), (2, indexes.rawr()), (3, tout.data.rawr())]);
         let commands = ctx.encode_workgroup(&pipeline, entries, workgroup_x, workgroup_y);
         ctx.execute_commands(commands);
-
-        tout
     }
 }
 
-impl<T: GpuNum + Copy> Debug for GpuTensor<T> {
+impl<T: GpuNum> Debug for GpuTensor<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "GpuTensor<{}>[", T::num_type().gpu_type())?;
         let array = self.get_array();
@@ -315,8 +365,8 @@ mod tests {
         let start = Instant::now();
         let values = t1.matrix_mul(&t2);
         println!("time: {:.03?}", start.elapsed());
-        //let values = values.get_array()[0][0];
-        //println!("v: {values}");
+        // let values = &values.get_array()[0];
+        // println!("v: {values:?}");
     }
 
     #[test]
