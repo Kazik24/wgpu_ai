@@ -86,13 +86,17 @@ impl PipelineRegistry {
             PipelineType::FunctionElementwise { func, in_place_arg } => {
                 let entry_name = "elementwise_func";
                 let mut args = [(NumType::F32, false, false); 8];
-                let var_names = ["arg0", "arg1", "arg2", "arg3", "arg4", "arg5", "arg6", "arg7"];
-                let func_expr = func.compile(&var_names);
+
                 let out_ty = func.eval_type();
-                for (i, fa) in func.get_arguments().unwrap().into_iter().enumerate() {
-                    args[i] = (fa, Some(i as u8) == *in_place_arg, true);
+                let args = func.get_arguments().unwrap().into_iter().enumerate();
+                let args = args.map(|(i, fa)| (fa, Some(i as u8) == *in_place_arg, true)).collect::<Vec<_>>();
+                if args.len() > VAR_NAMES_MAX.len() {
+                    panic!("too many arguments");
                 }
-                let template = elementwise_shader_template(args, func_expr, entry_name, *in_place_arg, out_ty);
+
+                let func_expr = func.compile(VAR_NAMES_MAX);
+
+                let template = elementwise_shader_template(&args, func_expr, entry_name, *in_place_arg, out_ty);
                 Self::compile_compute_pipeline(template.replace("@pipeline_workgroup_size", &wg_attribute).into(), entry_name)
             }
             _ => unimplemented!(),
@@ -123,6 +127,14 @@ impl PipelineRegistry {
         })
     }
 }
+
+#[rustfmt::skip]
+const VAR_NAMES_MAX: &[&str] = &[
+    "arg0", "arg1", "arg2", "arg3", "arg4", "arg5", "arg6", "arg7",
+    "arg8", "arg9", "arg10", "arg11", "arg12", "arg13", "arg14", "arg15",
+    "arg16", "arg17", "arg18", "arg19", "arg20", "arg21", "arg22", "arg23",
+    "arg24", "arg25", "arg26", "arg27", "arg28", "arg29", "arg30", "arg31",
+];
 
 const MATRIX_MUL_SHADER: &str = r###"
 @group(0) @binding(0)
@@ -158,27 +170,9 @@ fn matrix_mul_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 "###;
 
-pub(super) const ELEMENTWISE_OUT_BIND_NUM: u32 = 33;
-fn elementwise_shader_template(args: [(NumType, bool, bool); 8], func_expr: String, entry_name: &str, out_arg: Option<u8>, out_type: NumType) -> String {
+fn elementwise_shader_template(args: &[(NumType, bool, bool)], func_expr: String, entry_name: &str, out_arg: Option<u8>, out_type: NumType) -> String {
     const SHADER_CODE: &str = r###"
-@group(0) @binding(0)
-var<storage, @READ_WRITE0> inout0: array<@DATA_TYPE0>;
-@group(0) @binding(1)
-var<storage, @READ_WRITE1> inout1: array<@DATA_TYPE1>;
-@group(0) @binding(2)
-var<storage, @READ_WRITE2> inout2: array<@DATA_TYPE2>;
-@group(0) @binding(3)
-var<storage, @READ_WRITE3> inout3: array<@DATA_TYPE3>;
-@group(0) @binding(4)
-var<storage, @READ_WRITE4> inout4: array<@DATA_TYPE4>;
-@group(0) @binding(5)
-var<storage, @READ_WRITE5> inout5: array<@DATA_TYPE5>;
-@group(0) @binding(6)
-var<storage, @READ_WRITE6> inout6: array<@DATA_TYPE6>;
-@group(0) @binding(7)
-var<storage, @READ_WRITE7> inout7: array<@DATA_TYPE7>;
-@group(0) @binding(33)
-var<storage, read_write> out_new: array<@DATA_TYPE_OUT>;
+@VAR_DEFS
 
 fn silu_activation(val: f32) -> f32 {
     return val / (1.0 + exp(-val));
@@ -190,46 +184,46 @@ fn sigmoid_activation(val: f32) -> f32 {
     return 1.0 / (1.0 + exp(-val));
 }
 
-
 @compute
 @pipeline_workgroup_size
 fn #ENTRY_FUNC_NAME(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if global_id.x > arrayLength(&inout0) { //inout0 should be always defined
         return;
     }
-    @VAR_EXPR0
-    @VAR_EXPR1
-    @VAR_EXPR2
-    @VAR_EXPR3
-    @VAR_EXPR4
-    @VAR_EXPR5
-    @VAR_EXPR6
-    @VAR_EXPR7
+@VAR_EXPRS
     let result = @FLOW_FUNC_EXPR
     @ASSIGN_EXPR
 }
 "###;
+    assert!(args.len() > 0);
 
-    let mut value = SHADER_CODE.to_string();
+    let mut var_defs = String::new();
+    let mut var_exprs = String::new();
 
     for (i, (num_type, mutable, exists)) in args.iter().copied().enumerate() {
+        if !exists {
+            continue;
+        }
         let rw = if mutable { "read_write" } else { "read" };
-        value = value.replacen(&format!("@READ_WRITE{i}"), rw, 1);
-        value = value.replacen(&format!("@DATA_TYPE{i}"), num_type.gpu_type(), 1);
+        let ty = num_type.gpu_type();
+        var_defs = format!("{var_defs}@group(0) @binding({i})\nvar<storage, {rw}> inout{i}: array<{ty}>;\n");
 
-        let var_expr = exists.then(|| format!("let arg{i} = inout{i}[global_id.x];"));
-        value = value.replacen(&format!("@VAR_EXPR{i}"), &var_expr.unwrap_or_default(), 1);
+        var_exprs = format!("{var_exprs}    let arg{i} = inout{i}[global_id.x];\n");
     }
 
+    let mut value = SHADER_CODE.to_string();
     match out_arg {
-        Some(i) => {
-            value = value.replacen("@ASSIGN_EXPR", &format!("inout{i}[global_id.x] = result;"), 1);
-        }
+        Some(i) => value = value.replacen("@ASSIGN_EXPR", &format!("inout{i}[global_id.x] = result;"), 1),
         None => {
+            let i = args.len();
+            let ty = out_type.gpu_type();
+            var_defs = format!("{var_defs}@group(0) @binding({i})\nvar<storage, read_write> out_new: array<{ty}>;\n");
             value = value.replacen("@ASSIGN_EXPR", "out_new[global_id.x] = result;", 1);
         }
     }
-    value = value.replacen("@DATA_TYPE_OUT", out_type.gpu_type(), 1);
+
+    value = value.replacen("@VAR_DEFS", &var_defs, 1);
+    value = value.replacen("@VAR_EXPRS", &var_exprs, 1);
     value = value.replacen("@FLOW_FUNC_EXPR", &format!("{func_expr};"), 1);
     value = value.replacen("#ENTRY_FUNC_NAME", entry_name, 1);
     value

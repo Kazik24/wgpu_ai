@@ -217,7 +217,9 @@ impl WgpuContext {
     //     )
     // }
 
-    pub(crate) fn dispatch_workgroup(&self, pipeline: &wgpu::ComputePipeline, bind_entries: &[BindGroupEntry], workgroup_x: u32, workgroup_y: u32) {
+    pub(crate) fn encode_workgroup(
+        &self, pipeline: &wgpu::ComputePipeline, bind_entries: &[BindGroupEntry], workgroup_x: u32, workgroup_y: u32,
+    ) -> CommandEncoder {
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &pipeline.get_bind_group_layout(0),
@@ -234,7 +236,10 @@ impl WgpuContext {
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(workgroup_x, workgroup_y, 1);
         }
+        encoder
+    }
 
+    pub(crate) fn execute_commands(&self, encoder: CommandEncoder) {
         let index = self.queue.submit(Some(encoder.finish()));
         self.device.poll(wgpu::MaintainBase::WaitForSubmissionIndex(index));
     }

@@ -72,6 +72,7 @@ impl<'a> AnyGpuTensorRef<'a> {
     }
 }
 
+#[derive(Clone)]
 pub struct GpuTensor<T: GpuNum> {
     data: GpuVec<T>,
     shape: [usize; 2],
@@ -138,14 +139,80 @@ impl<T: GpuNum> GpuTensor<T> {
     pub fn len(&self) -> usize {
         self.shape[0] * self.shape[1]
     }
-    pub fn as_ref(&self) -> AnyGpuTensorRef {
-        use AnyGpuTensorRef::*;
+
+    pub fn as_any(self) -> AnyGpuTensor {
+        // SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
+        match T::num_type() {
+            NumType::F32 => AnyGpuTensor::F32(unsafe { transmute::<GpuTensor<T>, GpuTensor<f32>>(self) }),
+            NumType::I32 => AnyGpuTensor::I32(unsafe { transmute::<GpuTensor<T>, GpuTensor<i32>>(self) }),
+            NumType::U32 => AnyGpuTensor::U32(unsafe { transmute::<GpuTensor<T>, GpuTensor<u32>>(self) }),
+        }
+    }
+    pub fn as_any_ref(&self) -> AnyGpuTensorRef {
         //SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
         match T::num_type() {
-            NumType::F32 => F32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<f32>>(self) }),
-            NumType::I32 => I32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<i32>>(self) }),
-            NumType::U32 => U32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<u32>>(self) }),
+            NumType::F32 => AnyGpuTensorRef::F32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<f32>>(self) }),
+            NumType::I32 => AnyGpuTensorRef::I32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<i32>>(self) }),
+            NumType::U32 => AnyGpuTensorRef::U32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<u32>>(self) }),
         }
+    }
+
+    pub fn apply<R: GpuNum>(&self, func: FlowFunc) -> GpuTensor<R> {
+        op(self, func)
+    }
+    pub fn apply2<A: GpuNum, R: GpuNum>(&self, other: &GpuTensor<A>, func: FlowFunc) -> GpuTensor<R> {
+        op((self, other), func)
+    }
+    pub fn apply3<A: GpuNum, B: GpuNum, R: GpuNum>(&self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, func: FlowFunc) -> GpuTensor<R> {
+        op((self, other1, other2), func)
+    }
+    pub fn apply4<A: GpuNum, B: GpuNum, C: GpuNum, R: GpuNum>(
+        &self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, other3: &GpuTensor<C>, func: FlowFunc,
+    ) -> GpuTensor<R> {
+        op((self, other1, other2, other3), func)
+    }
+    pub fn apply_assign(&mut self, func: FlowFunc) {
+        op_inplace(self, func);
+    }
+    pub fn apply_assign2<A: GpuNum>(&mut self, other: &GpuTensor<A>, func: FlowFunc) {
+        op_inplace((self, other), func);
+    }
+    pub fn apply_assign3<A: GpuNum, B: GpuNum>(&mut self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, func: FlowFunc) {
+        op_inplace((self, other1, other2), func);
+    }
+    pub fn apply_assign4<A: GpuNum, B: GpuNum, C: GpuNum>(&mut self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, other3: &GpuTensor<C>, func: FlowFunc) {
+        op_inplace((self, other1, other2, other3), func);
+    }
+    pub fn activation_assign(&mut self, activation: ActivationType) {
+        self.apply_assign(match T::num_type() {
+            NumType::F32 => FlowFunc::Argument(0, NumType::F32).activation(activation),
+            ty => FlowFunc::Argument(0, ty).cast_to(NumType::F32).activation(activation).cast_to(ty), //double cast
+        });
+    }
+    pub fn activation(&self, activation: ActivationType) -> GpuTensor<f32> {
+        self.apply(match T::num_type() {
+            NumType::F32 => FlowFunc::Argument(0, NumType::F32).activation(activation),
+            ty => FlowFunc::Argument(0, ty).cast_to(NumType::F32).activation(activation), //double cast
+        })
+    }
+
+    pub fn gated_activation_assign<A: GpuNum>(&mut self, activation: ActivationType, mul_activation_by_elementwise: &GpuTensor<A>) {
+        assert!(self.shape() == mul_activation_by_elementwise.shape(), "shapes must be equal");
+        let func = FlowFunc::Argument(0, T::num_type()).optimize_cast_to(NumType::F32).activation(activation)
+            * FlowFunc::Argument(1, A::num_type()).optimize_cast_to(NumType::F32);
+        self.apply_assign2(mul_activation_by_elementwise, func.optimize_cast_to(T::num_type()));
+    }
+    pub fn gated_activation_assign_gate(&self, activation: ActivationType, mul_activation_by_elementwise: &mut GpuTensor<f32>) {
+        assert!(self.shape() == mul_activation_by_elementwise.shape(), "shapes must be equal");
+        let func = FlowFunc::Argument(0, T::num_type()).optimize_cast_to(NumType::F32).activation(activation) * FlowFunc::Argument(1, NumType::F32);
+        op_inplace((self, mul_activation_by_elementwise), func.optimize_cast_to(NumType::F32));
+    }
+
+    pub fn gated_activation<A: GpuNum>(&self, activation: ActivationType, mul_activation_by_elementwise: &GpuTensor<A>) -> GpuTensor<f32> {
+        assert!(self.shape() == mul_activation_by_elementwise.shape(), "shapes must be equal");
+        let func = FlowFunc::Argument(0, T::num_type()).optimize_cast_to(NumType::F32).activation(activation)
+            * FlowFunc::Argument(1, T::num_type()).optimize_cast_to(NumType::F32);
+        self.apply2(mul_activation_by_elementwise, func.optimize_cast_to(NumType::F32))
     }
 }
 
@@ -178,62 +245,10 @@ impl GpuTensor<f32> {
         );
 
         let entries = &bind_entries([(0, value_a.data.rawr()), (1, value_b.data.rawr()), (2, indexes.rawr()), (3, tout.data.rawr())]);
-        ctx.dispatch_workgroup(&pipeline, entries, workgroup_x, workgroup_y);
+        let commands = ctx.encode_workgroup(&pipeline, entries, workgroup_x, workgroup_y);
+        ctx.execute_commands(commands);
 
         tout
-    }
-
-    pub fn apply<R: GpuNum>(&self, func: FlowFunc) -> GpuTensor<R> {
-        op(self, func)
-    }
-    pub fn apply2<A: GpuNum, R: GpuNum>(&self, other: &GpuTensor<A>, func: FlowFunc) -> GpuTensor<R> {
-        op((self, other), func)
-    }
-    pub fn apply3<A: GpuNum, B: GpuNum, R: GpuNum>(&self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, func: FlowFunc) -> GpuTensor<R> {
-        op((self, other1, other2), func)
-    }
-    pub fn apply4<A: GpuNum, B: GpuNum, C: GpuNum, R: GpuNum>(
-        &self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, other3: &GpuTensor<C>, func: FlowFunc,
-    ) -> GpuTensor<R> {
-        op((self, other1, other2, other3), func)
-    }
-    pub fn apply_assign(&mut self, func: FlowFunc) {
-        op_inplace(self, func);
-    }
-    pub fn apply_assign2<A: GpuNum>(&mut self, other: &GpuTensor<A>, func: FlowFunc) {
-        op_inplace((self, other), func);
-    }
-    pub fn apply_assign3<A: GpuNum, B: GpuNum>(&mut self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, func: FlowFunc) {
-        op_inplace((self, other1, other2), func);
-    }
-    pub fn apply_assign4<A: GpuNum, B: GpuNum, C: GpuNum>(&mut self, other1: &GpuTensor<A>, other2: &GpuTensor<B>, other3: &GpuTensor<C>, func: FlowFunc) {
-        op_inplace((self, other1, other2, other3), func);
-    }
-
-    pub fn activation_assign(&mut self, activation: ActivationType) {
-        self.apply_assign(FlowFunc::Argument(0, NumType::F32).activation(activation));
-    }
-
-    pub fn gated_activation_assign(&mut self, activation: ActivationType, mul_activation_by_elementwise: &Self) {
-        assert!(self.shape() == mul_activation_by_elementwise.shape(), "shapes must be equal");
-        let func = FlowFunc::Argument(0, NumType::F32).activation(activation) * FlowFunc::Argument(1, NumType::F32);
-        self.apply_assign2(mul_activation_by_elementwise, func);
-    }
-
-    pub fn gated_activation_assign_other(&self, activation: ActivationType, mul_activation_by_elementwise: &mut Self) {
-        assert!(self.shape() == mul_activation_by_elementwise.shape(), "shapes must be equal");
-        let func = FlowFunc::Argument(0, NumType::F32).activation(activation) * FlowFunc::Argument(1, NumType::F32);
-        op_inplace((self, mul_activation_by_elementwise), func);
-    }
-
-    pub fn activation(&self, activation: ActivationType) -> GpuTensor<f32> {
-        self.apply(FlowFunc::Argument(0, NumType::F32).activation(activation))
-    }
-
-    pub fn gated_activation(&self, activation: ActivationType, mul_activation_by_elementwise: &Self) -> GpuTensor<f32> {
-        assert!(self.shape() == mul_activation_by_elementwise.shape(), "shapes must be equal");
-        let func = FlowFunc::Argument(0, NumType::F32).activation(activation) * FlowFunc::Argument(1, NumType::F32);
-        self.apply2(mul_activation_by_elementwise, func)
     }
 }
 
@@ -361,7 +376,7 @@ mod tests {
 
             tensor = GpuTensor::new(&[&data]);
             let mut result = GpuTensor::new(&[&gate]);
-            tensor.gated_activation_assign_other(act, &mut result);
+            tensor.gated_activation_assign_gate(act, &mut result);
             let values = result.get_array()[0].clone();
             assert!(vec.iter().zip(values).all(|(a, b)| (a - b).abs() < 0.0001));
 

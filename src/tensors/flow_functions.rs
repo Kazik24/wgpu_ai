@@ -19,6 +19,7 @@ pub enum FlowFunc {
     Sub(Box<Self>, Box<Self>),
     Mul(Box<Self>, Box<Self>),
     Div(Box<Self>, Box<Self>),
+    Rem(Box<Self>, Box<Self>),
     Pow(Box<Self>, Box<Self>),
     Min(Box<Self>, Box<Self>),
     Max(Box<Self>, Box<Self>),
@@ -43,7 +44,23 @@ impl FlowFunc {
         val.as_any().flow_const()
     }
 
-    pub fn cast_to(self, num_type: NumType) -> Self {
+    pub fn cast_to(mut self, num_type: NumType) -> Self {
+        if let FlowFunc::CastTo(_, ty) = &mut self {
+            *ty = num_type;
+            return self;
+        }
+        FlowFunc::CastTo(Box::new(self), num_type)
+    }
+
+    pub fn optimize_cast_to(mut self, num_type: NumType) -> Self {
+        if let FlowFunc::CastTo(_, ty) = &mut self {
+            *ty = num_type;
+            return self;
+        }
+        let ty = self.eval_type();
+        if ty == num_type {
+            return self;
+        }
         FlowFunc::CastTo(Box::new(self), num_type)
     }
 
@@ -93,6 +110,7 @@ impl FlowFunc {
             CastTo(a, ty) => a.visit_args_replace(args),
             ConstF32(_) | ConstI32(_) | ConstU32(_) => {}
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) => _ = (a.visit_args_replace(args), b.visit_args_replace(args)),
+            Rem(a, b) => _ = (a.visit_args_replace(args), b.visit_args_replace(args)),
             Pow(a, b) | Min(a, b) | Max(a, b) => _ = (a.visit_args_replace(args), b.visit_args_replace(args)),
             Neg(a) | Exp(a) | Log(a) | Sqrt(a) | Tanh(a) | Sigmoid(a) | ReLU(a) => a.visit_args_replace(args),
             GeLU(a) | SiLU(a) => a.visit_args_replace(args),
@@ -142,6 +160,7 @@ impl FlowFunc {
             ConstU32(_) => NumType::U32,
             CastTo(_, t) | Argument(_, t) => *t,
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) => Self::type_match(a.eval_type(), b.eval_type()),
+            Rem(a, b) => Self::type_match(a.eval_type(), b.eval_type()),
             Pow(a, b) => Self::type_match(Self::type_match(a.eval_type(), b.eval_type()), NumType::F32),
             Min(a, b) | Max(a, b) => Self::type_match(a.eval_type(), b.eval_type()),
             ReLU(a) => a.eval_type(),
@@ -201,7 +220,12 @@ impl FlowFunc {
             Div(a, b) => {
                 let a = a.eval_const(depth.saturating_sub(1));
                 let b = b.eval_const(depth.saturating_sub(1));
-                Self::bin_op_same_types(&a, &b, "div", |a, b| Self::new_const(a / b), |a, b| ic(a / b), |a, b| uc(a / b))
+                Self::bin_op_same_types(&a, &b, "div", |a, b| fc(a / b), |a, b| ic(a / b), |a, b| uc(a / b))
+            }
+            Rem(a, b) => {
+                let a = a.eval_const(depth.saturating_sub(1));
+                let b = b.eval_const(depth.saturating_sub(1));
+                Self::bin_op_same_types(&a, &b, "mod", |a, b| fc(a % b), |a, b| ic(a % b), |a, b| uc(a % b))
             }
             Pow(a, b) => match (a.eval_const(depth.saturating_sub(1)), b.eval_const(depth.saturating_sub(1))) {
                 (ConstF32(a), ConstF32(b)) => ConstF32(HashF32(a.0.powf(b.0))),
@@ -289,6 +313,7 @@ impl FlowFunc {
             Argument(index, t) => _ = args.insert((*index, *t)),
             CastTo(a, _) => a.fetch_arguments(args),
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) => _ = (a.fetch_arguments(args), b.fetch_arguments(args)),
+            Rem(a, b) => _ = (a.fetch_arguments(args), b.fetch_arguments(args)),
             Pow(a, b) | Min(a, b) | Max(a, b) => _ = (a.fetch_arguments(args), b.fetch_arguments(args)),
             Neg(a) | Exp(a) | Log(a) | Sqrt(a) | Tanh(a) => a.fetch_arguments(args),
             Sigmoid(a) | ReLU(a) | GeLU(a) | SiLU(a) => a.fetch_arguments(args),
@@ -319,6 +344,7 @@ impl FlowFunc {
             Sub(a, b) => format!("({} - {})", a.compile(var_names), b.compile(var_names)),
             Mul(a, b) => format!("({} * {})", a.compile(var_names), b.compile(var_names)),
             Div(a, b) => format!("({} / {})", a.compile(var_names), b.compile(var_names)),
+            Rem(a, b) => format!("({} % {})", a.compile(var_names), b.compile(var_names)),
             Pow(a, b) => format!("pow({}, {})", a.compile(var_names), b.compile(var_names)),
             Min(a, b) => format!("min({}, {})", a.compile(var_names), b.compile(var_names)),
             Max(a, b) => format!("max({}, {})", a.compile(var_names), b.compile(var_names)),
@@ -328,7 +354,7 @@ impl FlowFunc {
             Sqrt(a) => format!("sqrt({})", a.compile(var_names)),
             Tanh(a) => format!("tanh({})", a.compile(var_names)),
             Sigmoid(a) => format!("sigmoid_activation({})", a.compile(var_names)),
-            ReLU(a) => format!("max(0.0, {})", a.compile(var_names)),
+            ReLU(a) => format!("max({}, {}(0))", a.compile(var_names), a.eval_type().gpu_type()),
             SiLU(a) => format!("silu_activation({})", a.compile(var_names)),
             GeLU(a) => format!("gelu_activation({})", a.compile(var_names)),
         }
@@ -387,6 +413,7 @@ impl_bin_op!(Add, add, Add);
 impl_bin_op!(Sub, sub, Sub);
 impl_bin_op!(Mul, mul, Mul);
 impl_bin_op!(Div, div, Div);
+impl_bin_op!(Rem, rem, Rem);
 
 #[cfg(test)]
 mod tests {

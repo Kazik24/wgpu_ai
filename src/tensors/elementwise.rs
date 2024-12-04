@@ -1,6 +1,6 @@
 use wgpu::BindGroupEntry;
 
-use crate::tensors::{PipelineType, WgpuContext, ELEMENTWISE_OUT_BIND_NUM};
+use crate::tensors::{PipelineType, WgpuContext};
 
 use super::{AnyGpuTensor, AnyGpuTensorRef, FlowFunc, GpuNum, GpuTensor, NumType};
 
@@ -23,7 +23,7 @@ macro_rules! impl_elementwise_op {
             #[allow(non_snake_case)]
             fn arguments(&self) -> Vec<AnyGpuTensorRef> {
                 let ($($gen),*) = self;
-                let array = [$($gen.as_ref()),*];
+                let array = [$($gen.as_any_ref()),*];
                 array.to_vec()
             }
         }
@@ -40,7 +40,7 @@ macro_rules! impl_elementwise_op_gen {
             #[allow(non_snake_case)]
             fn arguments(&self) -> Vec<AnyGpuTensorRef> {
                 let ($($gen),*) = self;
-                let array = [$($gen.as_ref()),*];
+                let array = [$($gen.as_any_ref()),*];
                 array.to_vec()
             }
         }
@@ -170,12 +170,13 @@ fn runtime_op_internal(args: &[AnyGpuTensorRef], in_place: Option<u8>, func: Flo
     }
     if let Some(output) = &output {
         entries.push(BindGroupEntry {
-            binding: ELEMENTWISE_OUT_BIND_NUM,
+            binding: args.len() as u32,
             resource: output.as_ref().raw().as_entire_binding(),
         });
     }
     let workgroup_x = (count as f64 / ctx.wg_1d().x_size as f64).ceil() as u32;
-    ctx.dispatch_workgroup(&pipeline, &entries, workgroup_x, 1);
+    let commands = ctx.encode_workgroup(&pipeline, &entries, workgroup_x, 1);
+    ctx.execute_commands(commands);
 
     output
 }
