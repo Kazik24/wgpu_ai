@@ -46,7 +46,7 @@ impl<T: GpuNum> GpuVec<T> {
         let ctx = WgpuContext::get();
         let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: length as u64 * std::mem::size_of::<T>() as u64,
+            size: length as u64 * T::num_type().gpu_layout().size() as u64,
             usage,
             mapped_at_creation: false,
         });
@@ -106,8 +106,8 @@ impl<T: GpuNum> GpuVec<T> {
         start..end
     }
     fn to_gpu_range(range: Range<usize>) -> Range<u64> {
-        let start = range.start as u64 * std::mem::size_of::<T>() as u64;
-        let end = range.end as u64 * std::mem::size_of::<T>() as u64;
+        let start = range.start as u64 * T::num_type().gpu_layout().size() as u64;
+        let end = range.end as u64 * T::num_type().gpu_layout().size() as u64;
         start..end
     }
 
@@ -161,7 +161,7 @@ impl<T: GpuNum> GpuVec<T> {
         }
 
         let item_count = range.len();
-        let source_offset = range.start as u64 * size_of::<T>() as u64;
+        let source_offset = range.start as u64 * T::num_type().gpu_layout().size() as u64;
 
         let mut staging_buffer = Self::empty_with_usage(item_count, BufferUsages::MAP_READ | BufferUsages::COPY_DST);
         let index = self.copy_to_internal(range, 0..item_count, &mut staging_buffer, false).unwrap();

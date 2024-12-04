@@ -1,10 +1,11 @@
-use std::fmt::Display;
+use std::{alloc::Layout, fmt::Display};
 
 use super::{FlowFunc, HashF32};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum NumType {
     F32,
+    // F16, //only supported in spirv-passthrough
     I32,
     U32,
 }
@@ -16,6 +17,16 @@ impl NumType {
             NumType::F32 => "f32",
             NumType::I32 => "i32",
             NumType::U32 => "u32",
+        }
+    }
+    pub const fn gpu_layout(self) -> Layout {
+        // SAFETY: alignment is non zero and power of two, size is a multiple of alignment
+        unsafe {
+            match self {
+                NumType::F32 => Layout::from_size_align_unchecked(4, 4),
+                NumType::I32 => Layout::from_size_align_unchecked(4, 4),
+                NumType::U32 => Layout::from_size_align_unchecked(4, 4),
+            }
         }
     }
 }

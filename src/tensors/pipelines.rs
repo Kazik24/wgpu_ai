@@ -4,7 +4,7 @@ use fxhash::FxHashMap;
 use parking_lot::{RwLock, RwLockReadGuard};
 use wgpu::*;
 
-use super::{FlowFunc, WgpuContext};
+use super::{FlowFunc, NumType, WgpuContext};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum PipelineType {
@@ -35,10 +35,10 @@ pub enum ActivationType {
 impl ActivationType {
     fn shader_expression(&self) -> &'static str {
         match self {
-            Self::SiLU => "val = silu_activation(val);",
+            Self::SiLU => "val = silu_activation_f32(val);",
             Self::ReLU => "val = max(0.0, val);",
-            Self::GeLU => "val = gelu_activation(val);",
-            Self::Sigmoid => "val = sigmoid_activation(val);",
+            Self::GeLU => "val = gelu_activation_f32(val);",
+            Self::Sigmoid => "val = sigmoid_activation_f32(val);",
         }
     }
 
@@ -105,6 +105,18 @@ impl PipelineRegistry {
                 let activation_expr = activation.shader_expression();
                 let entry_name = "activation_func";
                 let template = gated_activation_shader_template(*gated, *in_place_first_arg, activation_expr, "f32", entry_name);
+                Self::compile_compute_pipeline(template.replace("@pipeline_workgroup_size", &wg_attribute).into(), entry_name)
+            }
+            PipelineType::FunctionElementwise { func, in_place_arg } => {
+                let entry_name = "elementwise_func";
+                let mut args = [(NumType::F32, false, false); 8];
+                let var_names = ["arg0", "arg1", "arg2", "arg3", "arg4", "arg5", "arg6", "arg7"];
+                let func_expr = func.compile(&var_names);
+                let out_ty = func.eval_type();
+                for (i, fa) in func.get_arguments().unwrap().into_iter().enumerate() {
+                    args[i] = (fa, Some(i as u8) == *in_place_arg, true);
+                }
+                let template = elementwise_shader_template(args, func_expr, entry_name, *in_place_arg, out_ty);
                 Self::compile_compute_pipeline(template.replace("@pipeline_workgroup_size", &wg_attribute).into(), entry_name)
             }
             _ => unimplemented!(),
@@ -186,7 +198,7 @@ var<storage, read_write> inout_b: array<@DATA_TYPE>;
 var<storage, read_write> new_out: array<@DATA_TYPE>;
 
 fn silu_activation(val: f32) -> f32 {
-    return val * 1.0 / (1.0 + exp(-val));
+    return val / (1.0 + exp(-val));
 }
 fn gelu_activation(val: f32) -> f32 {
     return val * 0.5 * (1.0 + tanh(0.7978845608028654 * (val + 0.044715 * val * val * val)));
@@ -224,5 +236,82 @@ fn #ENTRY_FUNC_NAME(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // println!("value: {}", value.trim());
 
+    value
+}
+
+pub(super) const ELEMENTWISE_OUT_BIND_NUM: u32 = 33;
+fn elementwise_shader_template(args: [(NumType, bool, bool); 8], func_expr: String, entry_name: &str, out_arg: Option<u8>, out_type: NumType) -> String {
+    const SHADER_CODE: &str = r###"
+@group(0) @binding(0)
+var<storage, @READ_WRITE0> inout0: array<@DATA_TYPE0>;
+@group(0) @binding(1)
+var<storage, @READ_WRITE1> inout1: array<@DATA_TYPE1>;
+@group(0) @binding(2)
+var<storage, @READ_WRITE2> inout2: array<@DATA_TYPE2>;
+@group(0) @binding(3)
+var<storage, @READ_WRITE3> inout3: array<@DATA_TYPE3>;
+@group(0) @binding(4)
+var<storage, @READ_WRITE4> inout4: array<@DATA_TYPE4>;
+@group(0) @binding(5)
+var<storage, @READ_WRITE5> inout5: array<@DATA_TYPE5>;
+@group(0) @binding(6)
+var<storage, @READ_WRITE6> inout6: array<@DATA_TYPE6>;
+@group(0) @binding(7)
+var<storage, @READ_WRITE7> inout7: array<@DATA_TYPE7>;
+@group(0) @binding(33)
+var<storage, read_write> out_new: array<@DATA_TYPE_OUT>;
+
+fn silu_activation(val: f32) -> f32 {
+    return val / (1.0 + exp(-val));
+}
+fn gelu_activation(val: f32) -> f32 {
+    return val * 0.5 * (1.0 + tanh(0.7978845608028654 * (val + 0.044715 * val * val * val)));
+}
+fn sigmoid_activation(val: f32) -> f32 {
+    return 1.0 / (1.0 + exp(-val));
+}
+
+
+@compute
+@pipeline_workgroup_size
+fn #ENTRY_FUNC_NAME(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    if global_id.x > arrayLength(&inout1) { //inout1 should be always defined
+        return;
+    }
+    @VAR_EXPR0
+    @VAR_EXPR1
+    @VAR_EXPR2
+    @VAR_EXPR3
+    @VAR_EXPR4
+    @VAR_EXPR5
+    @VAR_EXPR6
+    @VAR_EXPR7
+    let result = @FLOW_FUNC_EXPR
+    @ASSIGN_EXPR
+}
+"###;
+
+    let mut value = SHADER_CODE.to_string();
+
+    for (i, (num_type, mutable, exists)) in args.iter().copied().enumerate() {
+        let rw = if mutable { "read_write" } else { "read" };
+        value = value.replacen(&format!("@READ_WRITE{i}"), rw, 1);
+        value = value.replacen(&format!("@DATA_TYPE{i}"), num_type.gpu_type(), 1);
+
+        let var_expr = exists.then(|| format!("let arg{i} = inout{i}[global_id.x];"));
+        value = value.replacen(&format!("@VAR_EXPR{i}"), &var_expr.unwrap_or_default(), 1);
+    }
+
+    match out_arg {
+        Some(i) => {
+            value = value.replacen("@ASSIGN_EXPR", &format!("inout{i}[global_id.x] = result;"), 1);
+        }
+        None => {
+            value = value.replacen("@ASSIGN_EXPR", "out_new[global_id.x] = result;", 1);
+        }
+    }
+    value = value.replacen("@DATA_TYPE_OUT", out_type.gpu_type(), 1);
+    value = value.replacen("@FLOW_FUNC_EXPR", &format!("{func_expr};"), 1);
+    value = value.replacen("#ENTRY_FUNC_NAME", entry_name, 1);
     value
 }

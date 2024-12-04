@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     fmt::Debug,
+    mem::transmute,
     sync::{Arc, LazyLock},
 };
 
@@ -11,8 +12,64 @@ use crate::tensors::wgpu_context::WgpuContext;
 
 use super::{
     pipelines::{self, WorkgroupSize},
-    ActivationType, GpuNum, GpuVec, PipelineType,
+    ActivationType, GpuNum, GpuVec, NumType, PipelineType,
 };
+
+pub enum AnyGpuTensor {
+    F32(GpuTensor<f32>),
+    I32(GpuTensor<i32>),
+    U32(GpuTensor<u32>),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum AnyGpuTensorRef<'a> {
+    F32(&'a GpuTensor<f32>),
+    I32(&'a GpuTensor<i32>),
+    U32(&'a GpuTensor<u32>),
+}
+
+impl AnyGpuTensor {
+    pub(super) const fn as_ref(&self) -> AnyGpuTensorRef {
+        match self {
+            AnyGpuTensor::F32(t) => AnyGpuTensorRef::F32(t),
+            AnyGpuTensor::I32(t) => AnyGpuTensorRef::I32(t),
+            AnyGpuTensor::U32(t) => AnyGpuTensorRef::U32(t),
+        }
+    }
+    pub fn cast<T: GpuNum>(self) -> Option<GpuTensor<T>> {
+        // SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
+        match (self, T::num_type()) {
+            (AnyGpuTensor::F32(t), NumType::F32) => Some(unsafe { transmute::<GpuTensor<f32>, GpuTensor<T>>(t) }),
+            (AnyGpuTensor::I32(t), NumType::I32) => Some(unsafe { transmute::<GpuTensor<i32>, GpuTensor<T>>(t) }),
+            (AnyGpuTensor::U32(t), NumType::U32) => Some(unsafe { transmute::<GpuTensor<u32>, GpuTensor<T>>(t) }),
+            _ => None,
+        }
+    }
+}
+
+impl<'a> AnyGpuTensorRef<'a> {
+    pub fn shape(&self) -> [usize; 2] {
+        match self {
+            AnyGpuTensorRef::F32(t) => t.shape,
+            AnyGpuTensorRef::I32(t) => t.shape,
+            AnyGpuTensorRef::U32(t) => t.shape,
+        }
+    }
+    pub fn num_type(&self) -> NumType {
+        match self {
+            AnyGpuTensorRef::F32(_) => NumType::F32,
+            AnyGpuTensorRef::I32(_) => NumType::I32,
+            AnyGpuTensorRef::U32(_) => NumType::U32,
+        }
+    }
+    pub(super) fn raw(&self) -> &'a wgpu::Buffer {
+        match self {
+            AnyGpuTensorRef::F32(t) => t.data.rawr(),
+            AnyGpuTensorRef::I32(t) => t.data.rawr(),
+            AnyGpuTensorRef::U32(t) => t.data.rawr(),
+        }
+    }
+}
 
 pub struct GpuTensor<T: GpuNum> {
     data: GpuVec<T>,
@@ -79,6 +136,15 @@ impl<T: GpuNum> GpuTensor<T> {
     }
     pub fn len(&self) -> usize {
         self.shape[0] * self.shape[1]
+    }
+    pub fn as_ref(&self) -> AnyGpuTensorRef {
+        use AnyGpuTensorRef::*;
+        //SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
+        match T::num_type() {
+            NumType::F32 => F32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<f32>>(self) }),
+            NumType::I32 => I32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<i32>>(self) }),
+            NumType::U32 => U32(unsafe { transmute::<&GpuTensor<T>, &GpuTensor<u32>>(self) }),
+        }
     }
 }
 

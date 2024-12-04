@@ -60,9 +60,9 @@ fn main() {
     let data1 = (0..512).map(|v| v as f32).collect::<Vec<_>>();
     let data2 = (0..512).map(|v| v as f32).collect::<Vec<_>>();
 
-    loop {
-        std::hint::spin_loop();
-    }
+    // loop {
+    //     std::hint::spin_loop();
+    // }
 
     //let result = GpuTensor::matrix_mul_native(&data1, &data2, indexes).await;
     //println!("result: {result:?}");

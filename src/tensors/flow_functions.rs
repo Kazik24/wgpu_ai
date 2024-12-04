@@ -1,7 +1,7 @@
 use core::panic;
 use std::{any::Any, collections::HashSet, fmt::Display, ops::*};
 
-use super::{AnyGpuNum, GpuNum, GpuTensor, NumType};
+use super::{ActivationType, AnyGpuNum, GpuNum, GpuTensor, NumType};
 
 // webgpu builtin functions https://webgpufundamentals.org/webgpu/lessons/webgpu-wgsl-function-reference.html
 #[allow(private_interfaces)]
@@ -37,20 +37,39 @@ pub enum FlowFunc {
 
 impl FlowFunc {
     const MAX_DEPTH: u8 = 255;
-    pub fn eval_one(&self, arg: impl GpuNum) -> AnyGpuNum {
-        self.eval_any(&[arg.as_any()])
-    }
-    pub fn eval_two(&self, arg1: impl GpuNum, arg2: impl GpuNum) -> AnyGpuNum {
-        self.eval_any(&[arg1.as_any(), arg2.as_any()])
-    }
-    pub fn eval_three(&self, arg1: impl GpuNum, arg2: impl GpuNum, arg3: impl GpuNum) -> AnyGpuNum {
-        self.eval_any(&[arg1.as_any(), arg2.as_any(), arg3.as_any()])
-    }
 
+    // *** UTILITY ***
     pub fn new_const(val: impl GpuNum) -> Self {
         val.as_any().flow_const()
     }
 
+    pub fn cast_to(self, num_type: NumType) -> Self {
+        FlowFunc::CastTo(Box::new(self), num_type)
+    }
+
+    pub fn activation(self, act: ActivationType) -> Self {
+        match act {
+            ActivationType::Sigmoid => FlowFunc::Sigmoid(Box::new(self)),
+            ActivationType::ReLU => FlowFunc::ReLU(Box::new(self)),
+            ActivationType::SiLU => FlowFunc::SiLU(Box::new(self)),
+            ActivationType::GeLU => FlowFunc::GeLU(Box::new(self)),
+        }
+    }
+
+    pub fn eval(&self, arg: impl GpuNum) -> AnyGpuNum {
+        self.eval_any(&[arg.as_any()])
+    }
+    pub fn eval2(&self, arg1: impl GpuNum, arg2: impl GpuNum) -> AnyGpuNum {
+        self.eval_any(&[arg1.as_any(), arg2.as_any()])
+    }
+    pub fn eval3(&self, arg1: impl GpuNum, arg2: impl GpuNum, arg3: impl GpuNum) -> AnyGpuNum {
+        self.eval_any(&[arg1.as_any(), arg2.as_any(), arg3.as_any()])
+    }
+    pub fn eval4(&self, arg1: impl GpuNum, arg2: impl GpuNum, arg3: impl GpuNum, arg4: impl GpuNum) -> AnyGpuNum {
+        self.eval_any(&[arg1.as_any(), arg2.as_any(), arg3.as_any(), arg4.as_any()])
+    }
+
+    // *** EVALUATION ***
     pub fn eval_any(&self, args: &[AnyGpuNum]) -> AnyGpuNum {
         let args = args.iter().map(|arg| arg.flow_const()).collect::<Vec<_>>();
         let mut func = self.clone();
@@ -131,8 +150,12 @@ impl FlowFunc {
                 assert!(matches!(t, NumType::F32 | NumType::I32), "neg only supports f32 or i32");
                 t
             }
-            Exp(a) | Log(a) | Sqrt(a) | Tanh(a) | Sigmoid(a) => Self::type_match(a.eval_type(), NumType::F32),
-            GeLU(a) | SiLU(a) => Self::type_match(a.eval_type(), NumType::F32),
+            Exp(a) | Log(a) | Sqrt(a) | Tanh(a) => Self::type_match(a.eval_type(), NumType::F32),
+            Sigmoid(a) | GeLU(a) | SiLU(a) => {
+                let t = a.eval_type();
+                assert!(matches!(t, NumType::F32), "function only supports f32");
+                t
+            }
         }
     }
 
@@ -236,7 +259,7 @@ impl FlowFunc {
         }
     }
 
-    fn get_arguments(&self) -> Result<Vec<NumType>, String> {
+    pub fn get_arguments(&self) -> Result<Vec<NumType>, String> {
         let mut args = HashSet::new();
         self.fetch_arguments(&mut args);
         let mut result = Vec::new();
@@ -262,8 +285,9 @@ impl FlowFunc {
     fn fetch_arguments(&self, args: &mut HashSet<(u8, NumType)>) {
         use FlowFunc::*;
         match self {
+            ConstF32(_) | ConstI32(_) | ConstU32(_) => {}
             Argument(index, t) => _ = args.insert((*index, *t)),
-            ConstF32(_) | ConstI32(_) | ConstU32(_) | CastTo(_, _) => {}
+            CastTo(a, _) => a.fetch_arguments(args),
             Add(a, b) | Sub(a, b) | Mul(a, b) | Div(a, b) => _ = (a.fetch_arguments(args), b.fetch_arguments(args)),
             Pow(a, b) | Min(a, b) | Max(a, b) => _ = (a.fetch_arguments(args), b.fetch_arguments(args)),
             Neg(a) | Exp(a) | Log(a) | Sqrt(a) | Tanh(a) => a.fetch_arguments(args),
@@ -374,12 +398,12 @@ mod tests {
     #[should_panic]
     fn test_basic_eval_error() {
         let func = Argument(0, NumType::F32) + Argument(1, NumType::U32) * Argument(2, NumType::F32);
-        func.eval_three(1.0, 2, 3.0).as_i32();
+        func.eval3(1.0, 2, 3.0).as_i32();
     }
 
     #[test]
     fn test_basic_eval() {
         let func = Argument(0, NumType::F32) + Argument(1, NumType::F32) * Argument(2, NumType::F32);
-        assert_eq!(func.eval_three(1.0, 2.0, 3.0).as_i32(), 7);
+        assert_eq!(func.eval3(1.0, 2.0, 3.0).as_i32(), 7);
     }
 }
