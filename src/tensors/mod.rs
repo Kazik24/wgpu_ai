@@ -5,6 +5,7 @@ mod gpu_num;
 mod gpu_tensor;
 mod gpu_vec;
 mod pipelines;
+mod quantized;
 mod wgpu_context;
 
 use std::{
@@ -12,7 +13,6 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use bytemuck::Pod;
 pub use cpu_tensor::*;
 pub use elementwise::*;
 pub use flow_functions::*;
@@ -20,6 +20,7 @@ pub use gpu_num::*;
 pub use gpu_tensor::*;
 pub use gpu_vec::*;
 pub use pipelines::*;
+pub use quantized::*;
 use rayon::prelude::*;
 pub use wgpu_context::*;
 use wide::*;

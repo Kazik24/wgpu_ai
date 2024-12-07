@@ -4,11 +4,13 @@ use fxhash::FxHashMap;
 use parking_lot::{RwLock, RwLockReadGuard};
 use wgpu::*;
 
-use super::{FlowFunc, NumType, WgpuContext};
+use super::{Dim, FlowFunc, NumType, WgpuContext};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum PipelineType {
     MatrixMul(NumType, bool), //second param is if to add value to output matrix
+    QuantizeU8,
+    Softmax(Dim),
     CustomMatrixMul {
         dot_accumulate_func: FlowFunc, //for elementwise multiply and add
         modify_func: FlowFunc,         //for writing values to output, e.g overwrite, or some_func(current, result)
@@ -102,6 +104,14 @@ impl PipelineRegistry {
                 let template = elementwise_shader_template(&args, func_expr, entry_name, *in_place_arg, out_ty);
                 Self::compile_compute_pipeline(template.replace("@pipeline_workgroup_size", &wg_attribute).into(), entry_name)
             }
+            PipelineType::QuantizeU8 => {
+                let mut code = QUANTIZE_TENSOR_SHADER.replacen("@pipeline_workgroup_size", &wg_attribute, 1);
+                Self::compile_compute_pipeline(code.into(), "quantize_rows_u8")
+            }
+            PipelineType::Softmax(dim) => {
+                let template = softmax_template(*dim, "softmax_f32");
+                Self::compile_compute_pipeline(template.replace("@pipeline_workgroup_size", &wg_attribute).into(), "softmax_f32")
+            }
             _ => unimplemented!(),
         }
     }
@@ -141,11 +151,11 @@ const VAR_NAMES_MAX: &[&str] = &[
 
 const MATRIX_MUL_SHADER: &str = r###"
 @group(0) @binding(0)
-var<storage, read_write> input_a: array<@DATA_TYPE>;
+var<storage, read_write> input_a: array<@DATA_TYPE>; //apparently read_write here is faster than read (by like 10 times on bigger matrices!!!)
 @group(0) @binding(1)
-var<storage, read_write> input_b: array<@DATA_TYPE>;
+var<storage, read> input_b: array<@DATA_TYPE>; //apparently read here is fastest
 @group(0) @binding(2)
-var<storage, read_write> indexes: MatrixMulIndexes;
+var<uniform> indexes: MatrixMulIndexes;
 @group(0) @binding(3)
 var<storage, read_write> output: array<@DATA_TYPE>;
 
@@ -230,4 +240,110 @@ fn #ENTRY_FUNC_NAME(@builtin(global_invocation_id) global_id: vec3<u32>) {
     value = value.replacen("@FLOW_FUNC_EXPR", &format!("{func_expr};"), 1);
     value = value.replacen("#ENTRY_FUNC_NAME", entry_name, 1);
     value
+}
+
+fn softmax_template(dim: Dim, entry_name: &str) -> String {
+    const SHADER_CODE: &str = r###"
+@group(0) @binding(0)
+var<storage, read_write> data: array<f32>;
+@group(0) @binding(2)
+var<uniform> size: u32;
+
+@compute
+@pipeline_workgroup_size
+fn #ENTRY_FUNC_NAME(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if idx >= size {
+        return;
+    }
+
+@INNER_CODE
+}
+"###;
+
+    const INNER_DIM_ROWS: &str = r###"
+    let offset = idx * size;
+    var max_value = f32(data[offset]);
+    for(var i: u32 = 1; i < size; i++) {
+        max_value = max(max_value, f32(data[offset + i]));
+    }
+
+    var sum: f32 = 0.0;
+    for(var i: u32 = 0; i < size; i++) {
+        let exp_val = exp(f32(data[offset + i]) - max_value);
+        data[offset + i] = exp_val;
+        sum += exp_val;
+    }
+
+    for(var i: u32 = 0; i < size; i++) {
+        data[offset + i] /= sum;
+    }
+"###;
+    const INNER_DIM_COLS: &str = r###"
+    let offset = idx * size;
+    var max_value = f32(data[offset]);
+    for(var i: u32 = 1; i < size; i++) {
+        max_value = max(max_value, f32(data[offset + i * size]));
+    }
+"###;
+
+    let value = SHADER_CODE.replacen("#ENTRY_FUNC_NAME", entry_name, 1);
+    let value = match dim {
+        Dim::Rows => value.replace("@INNER_CODE", INNER_DIM_ROWS.trim()),
+        Dim::Cols => value.replace("@INNER_CODE", INNER_DIM_COLS.trim()), //todo
+    };
+    value
+}
+
+const QUANTIZE_TENSOR_SHADER: &str = r###"
+@group(0) @binding(0)
+var<storage, read> input: array<f32>;
+@group(0) @binding(1)
+var<storage, read_write> output: array<u32>;
+@group(0) @binding(2)
+var<storage, read_write> scales: array<f32>;
+@group(0) @binding(4)
+var<uniform> indexes: MatrixSizes;
+
+struct MatrixSizes{
+    rows: u32,
+    cols: u32,
+}
+
+
+@compute
+@pipeline_workgroup_size
+fn quantize_rows_u8(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let y = global_id.x;
+    if y >= indexes.rows {
+        return;
+    }
+
+    // calculate scales
+    let offset = y * indexes.cols;
+    var min_val = input[offset];
+    var max_val = input[offset];
+    for(var i: u32 = 1; i < indexes.cols; i++) {
+        min_val = min(min_val, input[offset + i]);
+        max_val = max(max_val, input[offset + i]);
+    }
+    let scale = max_val - min_val;
+    scales[y] = scale;
+
+    // quantize and pack row values into u8
+    for(var i: u32 = 0; i < (indexes.cols / 4); i++) {
+        var subarray: vec4f = vec4f(0.0, 0.0, 0.0, 0.0);
+        let limit = min(i + 4, indexes.cols);
+        for(var j: u32 = i + offset;j < limit; j++) {
+            subarray[j] = (input[j]  - min_val) / scale;
+        }
+        output[i] = pack4x8snorm(subarray);
+    }
+}
+"###;
+
+#[test]
+fn test_compile() {
+    let ctx = WgpuContext::get();
+    ctx.pipelines.get(PipelineType::Softmax(Dim::Rows), ctx.wg_1d());
 }

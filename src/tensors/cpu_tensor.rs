@@ -77,3 +77,23 @@ pub fn matmul(xout: &mut [f32], x: &[f32], w: &[f32], n: usize, o: usize) {
         });
     });
 }
+
+pub fn softmax(x: &mut [f32]) {
+    let mut sum: f32 = 0.0;
+    let mut max_val: f32 = x[0];
+
+    for i in x.iter() {
+        if *i > max_val {
+            max_val = *i;
+        }
+    }
+
+    for i in x.iter_mut() {
+        *i = (*i - max_val).exp();
+        sum += *i;
+    }
+
+    for i in x.iter_mut() {
+        *i /= sum;
+    }
+}

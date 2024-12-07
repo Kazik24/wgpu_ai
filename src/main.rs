@@ -6,13 +6,14 @@ use std::{
 
 mod tensors;
 
+use bytes::Bytes;
 use safetensors::{tensor, SafeTensors, View};
 use tensors::{GpuTensor, MatrixMulIndexes};
 
-fn memory_map_file(path: &Path) -> memmap2::Mmap {
+fn memory_map_file(path: &Path) -> Bytes {
     let file = File::open(path).unwrap();
     let mmap = unsafe { memmap2::MmapOptions::new().map(&file).unwrap() };
-    mmap
+    Bytes::from_owner(mmap) // doesn't copy any memory
 }
 
 #[cfg(target_os = "linux")]

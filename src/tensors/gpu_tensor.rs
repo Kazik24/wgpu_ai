@@ -132,9 +132,11 @@ impl<T: GpuNum> GpuTensor<T> {
         let continus = continus.collect::<Vec<_>>();
         let data = GpuVec::with_usage(&continus, usage);
 
-        let shape = [x, y.unwrap()];
+        let shape = [x, y.expect("empty data")];
 
-        Self { data, shape }
+        let data = Self { data, shape };
+        assert!(data.len() > 0, "empty data");
+        data
     }
     pub fn empty(shape: [usize; 2]) -> Self {
         Self::empty_with(shape, BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST)
@@ -151,6 +153,7 @@ impl<T: GpuNum> GpuTensor<T> {
         data.chunks_exact(self.shape[1]).map(|c| c.to_vec()).collect()
     }
 
+    /// Shape of the tensor, [rows, cols]
     pub fn shape(&self) -> [usize; 2] {
         self.shape
     }
@@ -294,7 +297,7 @@ impl<T: GpuNum> GpuTensor<T> {
         let workgroup_x = (indexes.out_cols as f64 / ctx.wg_2d().x_size as f64).ceil() as u32;
         let workgroup_y = (indexes.out_rows as f64 / ctx.wg_2d().y_size as f64).ceil() as u32;
         let out_length = indexes.out_rows as usize * indexes.out_cols as usize;
-        let indexes = GpuVec::with_usage(&indexes.as_array(), BufferUsages::STORAGE | BufferUsages::COPY_SRC);
+        let indexes = GpuVec::with_usage(&indexes.as_array(), BufferUsages::UNIFORM | BufferUsages::COPY_SRC);
 
         let entries = &bind_entries([(0, value_a.data.rawr()), (1, value_b.data.rawr()), (2, indexes.rawr()), (3, tout.data.rawr())]);
         let commands = ctx.encode_workgroup(&pipeline, entries, workgroup_x, workgroup_y);
@@ -354,8 +357,8 @@ mod tests {
 
         let dim = 1024 * 2;
 
-        let t1 = (1..=dim).map(|v| vec![v as f32; dim]).collect::<Vec<_>>();
-        let t2 = (1..=dim).map(|v| vec![v as f32; dim]).collect::<Vec<_>>();
+        let t1 = (1..=dim).map(|v| (0..dim).map(|i| (i + v) as f32).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let t2 = (1..=dim).map(|v| (0..dim).map(|i| (i + v) as f32).collect::<Vec<_>>()).collect::<Vec<_>>();
         println!("data prepared");
 
         let t1 = GpuTensor::new(&t1);
