@@ -3,6 +3,7 @@ use std::{
     collections::HashMap,
     fmt::{Debug, Display},
     marker::PhantomData,
+    mem::MaybeUninit,
     num::NonZeroU64,
     ops::{Bound, Range, RangeBounds},
     sync::{Arc, Condvar, Mutex},
@@ -160,6 +161,18 @@ impl<T: GpuNum> GpuVec<T> {
             return Vec::new();
         }
 
+        let len = range.len();
+        let mut data = Vec::<T>::with_capacity(len);
+        self.copy_to_cpu_internal(range, data.spare_capacity_mut());
+        unsafe { data.set_len(len) };
+        data
+    }
+
+    pub fn copy_to_cpu_internal(&self, range: Range<usize>, dst: &mut [MaybeUninit<T>]) {
+        if range.is_empty() {
+            return;
+        }
+
         let item_count = range.len();
         let source_offset = range.start as u64 * T::num_type().gpu_layout().size() as u64;
 
@@ -175,20 +188,25 @@ impl<T: GpuNum> GpuVec<T> {
         WgpuContext::get().device.poll(wgpu::Maintain::WaitForSubmissionIndex(index));
         notify_recv.wait();
 
-        let mut data = Vec::<T>::with_capacity(item_count);
-        {
+        debug_assert!(dst.len() == item_count, "lengths must match");
+        // SAFETY: We just checked the length of slice, and copy_from_slice checks that the lengths of bytes match
+        unsafe {
             let mapped_slice = slice.get_mapped_range();
-            let bytes = mapped_slice.len();
 
-            // SAFETY: We just allocated vec big enough
-            unsafe {
-                mapped_slice.as_ptr().copy_to_nonoverlapping(data.as_mut_ptr().cast::<u8>(), bytes);
-                data.set_len(item_count);
-            }
+            let (_, dst_bytes, _) = dst.align_to_mut::<MaybeUninit<u8>>();
+            let (_, src_bytes, _) = mapped_slice.align_to::<MaybeUninit<u8>>();
+            dst_bytes.copy_from_slice(src_bytes);
         }
         staging_buffer.rawr().unmap();
+    }
 
-        data
+    fn copy_to_cpu(&self, range: impl RangeBounds<usize>, dst: &mut [T]) {
+        let range = Self::check_bounds(range, self.len());
+        assert!(range.len() == dst.len(), "length of dst slice must match");
+        assert!(size_of::<T>() == size_of::<MaybeUninit<T>>());
+        // SAFETY: We know T is same layout as MaybeUninit<T> and T is GpuNum so all bit patterns are valid
+        let dst = unsafe { dst.align_to_mut::<MaybeUninit<T>>().1 };
+        self.copy_to_cpu_internal(range, dst);
     }
 }
 
@@ -260,7 +278,10 @@ mod tests {
             let data = (0..i).map(|v| -v as f32).collect::<Vec<_>>();
             let gpu_vec = GpuVec::new_storage(&data);
 
-            let values = gpu_vec.to_cpu(..);
+            let mut values = gpu_vec.to_cpu(..);
+            assert_eq!(data, values);
+            values.fill(0.0);
+            gpu_vec.copy_to_cpu(.., &mut values);
             assert_eq!(data, values);
         }
     }

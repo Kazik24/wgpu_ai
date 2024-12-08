@@ -35,6 +35,8 @@ trait Sealed {}
 
 #[allow(private_bounds)]
 pub trait GpuNum: std::fmt::Debug + Display + Sealed + Clone + Copy + Send + Sync + 'static {
+    fn zero() -> Self;
+    fn one() -> Self;
     fn as_f32(&self) -> f32 {
         self.as_any().into()
     }
@@ -109,6 +111,12 @@ impl Sealed for i32 {}
 impl Sealed for u32 {}
 
 impl GpuNum for f32 {
+    fn zero() -> Self {
+        0.0
+    }
+    fn one() -> Self {
+        1.0
+    }
     fn as_any(&self) -> AnyGpuNum {
         AnyGpuNum::F32(*self)
     }
@@ -124,6 +132,12 @@ impl GpuNum for f32 {
     }
 }
 impl GpuNum for i32 {
+    fn zero() -> Self {
+        0
+    }
+    fn one() -> Self {
+        1
+    }
     fn as_any(&self) -> AnyGpuNum {
         AnyGpuNum::I32(*self)
     }
@@ -139,6 +153,12 @@ impl GpuNum for i32 {
     }
 }
 impl GpuNum for u32 {
+    fn zero() -> Self {
+        0
+    }
+    fn one() -> Self {
+        1
+    }
     fn as_any(&self) -> AnyGpuNum {
         AnyGpuNum::U32(*self)
     }

@@ -138,6 +138,18 @@ impl<T: GpuNum> GpuTensor<T> {
         assert!(data.len() > 0, "empty data");
         data
     }
+
+    pub fn from_shape(data: &[T], shape: [usize; 2]) -> Self {
+        Self::from_shape_with(data, shape, BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST)
+    }
+    pub fn from_shape_with(data: &[T], shape: [usize; 2], usage: BufferUsages) -> Self {
+        let size = shape[0] * shape[1];
+        if size != data.len() {
+            panic!("data length must be equal to shape[0] * shape[1]");
+        }
+        let data = GpuVec::with_usage(data, usage);
+        Self { data, shape }
+    }
     pub fn empty(shape: [usize; 2]) -> Self {
         Self::empty_with(shape, BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST)
     }

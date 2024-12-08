@@ -1,14 +1,16 @@
 use rayon::prelude::*;
 use wide::f32x8;
 
+use super::{BytesView, GpuNum};
+
 #[derive(Debug)]
-pub struct CpuTensor {
-    data: Vec<f32>,
+pub struct CpuTensor<T: GpuNum> {
+    data: BytesView<T>,
     shape: [usize; 2],
 }
 
-impl CpuTensor {
-    pub fn new(data: &[impl AsRef<[f32]>]) -> Self {
+impl<T: GpuNum> CpuTensor<T> {
+    pub fn new(data: &[impl AsRef<[T]>]) -> Self {
         let x = data.len();
         let mut y = None;
 
@@ -24,19 +26,27 @@ impl CpuTensor {
         let data = continus.collect::<Vec<_>>();
         let shape = [x, y.unwrap()];
 
-        Self { data, shape }
+        Self {
+            data: BytesView::from_slice(data.into_boxed_slice()),
+            shape,
+        }
     }
 
     pub fn empty(shape: [usize; 2]) -> Self {
         assert!(shape[0] > 0 && shape[1] > 0, "shape must be greater than 0");
         let size = shape[0] * shape[1];
-        Self { data: vec![0.0; size], shape }
+        Self {
+            data: BytesView::from_slice(vec![T::zero(); size].into_boxed_slice()),
+            shape,
+        }
     }
     pub fn shape(&self) -> [usize; 2] {
         self.shape
     }
+}
 
-    pub fn matrix_mul(&self, other: &CpuTensor) -> CpuTensor {
+impl CpuTensor<f32> {
+    pub fn matrix_mul(&self, other: &CpuTensor<f32>) -> CpuTensor<f32> {
         assert!(
             self.shape[1] == other.shape[0],
             "width (shape[1]) of first tensor must be equal to height (shape[0]) of second tensor"

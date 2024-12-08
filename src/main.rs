@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod nn;
 mod tensors;
 
 use bytes::Bytes;
