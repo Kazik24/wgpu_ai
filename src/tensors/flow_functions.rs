@@ -389,6 +389,19 @@ impl std::fmt::Debug for HashF32 {
     }
 }
 
+// https://stackoverflow.com/questions/55253233/convert-fp32-to-bfloat16-in-c
+fn bfloat16_to_f32(b: u16) -> f32 {
+    f32::from_bits((b as u32) << 16)
+}
+fn round_bfloat16_to_f32(f: u16) -> f32 {
+    let b = bfloat16_to_f32(f);
+    b * 1.001957f32 //rounding magic number
+}
+
+fn f32_to_bfloat16(f: f32) -> u16 {
+    (f.to_bits() >> 16) as u16
+}
+
 macro_rules! impl_bin_op {
     ($op:ident, $func:ident, $enum_val:ident) => {
         impl $op for FlowFunc {

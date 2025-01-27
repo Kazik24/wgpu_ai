@@ -104,7 +104,7 @@ pub fn op<T: GpuNum>(args: impl ElementwiseOp<T>, func: FlowFunc) -> GpuTensor<T
     let arg_tensors = args.arguments();
     let result = runtime_op_internal(&arg_tensors, None, func);
     let result = result.expect("expected new tensor function");
-    match result.try_cast() {
+    match result.try_cast().map_err(|t| t.num_type()) {
         Err(ty) => panic!("Wrong output type inferred, expected {:?}, got {ty:?}", T::num_type()),
         Ok(result) => result,
     }
@@ -180,7 +180,7 @@ fn runtime_op_internal(args: &[AnyGpuTensorRef], in_place: Option<u8>, func: Flo
 
 #[cfg(test)]
 mod tests {
-    use crate::tensors::ActivationType;
+    use crate::tensors::{ActivationType, ContextPreference};
 
     use super::*;
     use FlowFunc::*;
@@ -189,6 +189,7 @@ mod tests {
     #[test]
     #[rustfmt::skip]
     fn test_function() {
+        WgpuContext::init(ContextPreference::Default);
         let tensor1 = GpuTensor::new(&[
             [1u32, 2, 3],
             [4, 5, 6],

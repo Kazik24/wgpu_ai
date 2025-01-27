@@ -13,7 +13,7 @@ use crate::tensors::wgpu_context::WgpuContext;
 use super::{
     op, op_inplace,
     pipelines::{self, WorkgroupSize},
-    ActivationType, FlowFunc, GpuNum, GpuVec, NumType, PipelineType,
+    ActivationType, AnyGpuNum, FlowFunc, GpuNum, GpuVec, NumType, PipelineType,
 };
 
 pub enum AnyGpuTensor {
@@ -52,17 +52,8 @@ impl AnyGpuTensor {
         }
     }
     #[inline]
-    pub fn try_cast<T: GpuNum>(self) -> Result<GpuTensor<T>, NumType> {
-        // SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
-        // this match should be inlined at monomorphization to only one case
-        unsafe {
-            match (self, T::num_type()) {
-                (AnyGpuTensor::F32(t), NumType::F32) => Ok(transmute::<GpuTensor<f32>, GpuTensor<T>>(t)),
-                (AnyGpuTensor::I32(t), NumType::I32) => Ok(transmute::<GpuTensor<i32>, GpuTensor<T>>(t)),
-                (AnyGpuTensor::U32(t), NumType::U32) => Ok(transmute::<GpuTensor<u32>, GpuTensor<T>>(t)),
-                (val, _) => Err(val.num_type()),
-            }
-        }
+    pub fn try_cast<T: GpuNum>(self) -> Result<GpuTensor<T>, Self> {
+        AnyGpuNum::try_downcast_tensor(self)
     }
 }
 
@@ -100,7 +91,7 @@ pub struct GpuTensor<T: GpuNum> {
 //note: bind group layout is inferred from variables used in @compute function, not all variables defined!!!
 
 #[repr(C)]
-pub struct MatrixMulIndexes {
+struct MatrixMulIndexes {
     pub out_rows: u32, //m, height of a and output, x
     pub out_cols: u32, //p, width of b and output, y
     pub length: u32,   // n, width of a and height of b, loop-iterations
@@ -160,9 +151,9 @@ impl<T: GpuNum> GpuTensor<T> {
         Self { data, shape }
     }
 
-    pub fn get_array(&self) -> Vec<Vec<T>> {
+    pub fn get_array(&self) -> Vec<Box<[T]>> {
         let data = self.data.to_cpu(..);
-        data.chunks_exact(self.shape[1]).map(|c| c.to_vec()).collect()
+        data.chunks_exact(self.shape[1]).map(|c| c.to_vec().into_boxed_slice()).collect()
     }
 
     /// Shape of the tensor, [rows, cols]
@@ -183,27 +174,11 @@ impl<T: GpuNum> GpuTensor<T> {
 
     #[inline]
     pub fn as_any(self) -> AnyGpuTensor {
-        // SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
-        // this match should be inlined at monomorphization to only one case
-        unsafe {
-            match T::num_type() {
-                NumType::F32 => AnyGpuTensor::F32(transmute::<GpuTensor<T>, GpuTensor<f32>>(self)),
-                NumType::I32 => AnyGpuTensor::I32(transmute::<GpuTensor<T>, GpuTensor<i32>>(self)),
-                NumType::U32 => AnyGpuTensor::U32(transmute::<GpuTensor<T>, GpuTensor<u32>>(self)),
-            }
-        }
+        AnyGpuNum::upcast_tensor(self)
     }
     #[inline]
     pub fn as_any_ref(&self) -> AnyGpuTensorRef {
-        // SAFETY: GpuNum is implemented for this and only this types, we can check type at runtime and transmute
-        // this match should be inlined at monomorphization to only one case
-        unsafe {
-            match T::num_type() {
-                NumType::F32 => AnyGpuTensorRef::F32(transmute::<&GpuTensor<T>, &GpuTensor<f32>>(self)),
-                NumType::I32 => AnyGpuTensorRef::I32(transmute::<&GpuTensor<T>, &GpuTensor<i32>>(self)),
-                NumType::U32 => AnyGpuTensorRef::U32(transmute::<&GpuTensor<T>, &GpuTensor<u32>>(self)),
-            }
-        }
+        AnyGpuNum::upcast_tensor_ref(self)
     }
 
     pub fn apply<R: GpuNum>(&self, func: FlowFunc) -> GpuTensor<R> {
@@ -339,6 +314,8 @@ fn bind_entries<const N: usize>(array: [(u32, &wgpu::Buffer); N]) -> [BindGroupE
 mod tests {
     use std::time::Instant;
 
+    use rayon::vec;
+
     use crate::tensors::{ContextPreference, CpuTensor};
 
     use super::*;
@@ -415,6 +392,25 @@ mod tests {
             assert!(vec.iter().zip(values).all(|(a, b)| (a - b).abs() < 0.000001));
         }
         println!("time: {:.03?}", start.elapsed());
+    }
+
+    #[test]
+    fn test_mul_enbedings_size() {
+        WgpuContext::init(ContextPreference::HighPerformance);
+        const DIM1: usize = 92416;
+        const DIM2: usize = 4096;
+        let data = (0..DIM1).map(|v| vec![v as f32; DIM2]).collect::<Vec<_>>();
+
+        let tensor1 = GpuTensor::new(&data);
+        let data2 = (0..DIM2).map(|v| vec![v as f32; 1]).collect::<Vec<_>>();
+        let tensor2 = GpuTensor::new(&data2);
+        drop(data);
+        drop(data2);
+        println!("tensors prepared, shape1: {:?}, shape2: {:?}", tensor1.shape(), tensor2.shape());
+
+        let start = Instant::now();
+
+        let res = tensor1.matrix_mul(&tensor2);
     }
 
     #[test]

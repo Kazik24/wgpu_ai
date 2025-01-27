@@ -25,7 +25,7 @@ impl<T: GpuNum> GpuVec<T> {
         let buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             // SAFETY: Any integer can be aligned to u8 without issue, we know data is of type GpuNum which is sealed and implemented only
-            // by integers and floats
+            // by integers and floats which have all bit patters valid
             contents: unsafe { data.align_to::<u8>().1 },
             usage,
         });
@@ -84,7 +84,7 @@ impl<T: GpuNum> GpuVec<T> {
 
         let mut view = ctx.queue.write_buffer_with(&self.buffer, range.start, count).expect("Cannot write gpu buffer");
         // SAFETY: Any integer can be aligned to u8 without issue, we know data is of type GpuNum which is sealed and implemented only
-        // by integers and floats
+        // by integers and floats which have all bit patters valid
         view.copy_from_slice(unsafe { data.align_to::<u8>().1 });
         if submit {
             ctx.queue.submit([]);
@@ -163,7 +163,9 @@ impl<T: GpuNum> GpuVec<T> {
 
         let len = range.len();
         let mut data = Vec::<T>::with_capacity(len);
-        self.copy_to_cpu_internal(range, data.spare_capacity_mut());
+        let to_fill = &mut data.spare_capacity_mut()[..len];
+        self.copy_to_cpu_internal(range, to_fill);
+        // SAFETY: after copy_to_cpu_internal returns, we know that to_fill was initialized for len elements
         unsafe { data.set_len(len) };
         data
     }
@@ -175,6 +177,8 @@ impl<T: GpuNum> GpuVec<T> {
 
         let item_count = range.len();
         let source_offset = range.start as u64 * T::num_type().gpu_layout().size() as u64;
+
+        assert!(dst.len() == item_count, "lengths must match");
 
         let mut staging_buffer = Self::empty_with_usage(item_count, BufferUsages::MAP_READ | BufferUsages::COPY_DST);
         let index = self.copy_to_internal(range, 0..item_count, &mut staging_buffer, false).unwrap();
@@ -188,7 +192,6 @@ impl<T: GpuNum> GpuVec<T> {
         WgpuContext::get().device.poll(wgpu::Maintain::WaitForSubmissionIndex(index));
         notify_recv.wait();
 
-        debug_assert!(dst.len() == item_count, "lengths must match");
         // SAFETY: We just checked the length of slice, and copy_from_slice checks that the lengths of bytes match
         unsafe {
             let mapped_slice = slice.get_mapped_range();
@@ -205,6 +208,7 @@ impl<T: GpuNum> GpuVec<T> {
         assert!(range.len() == dst.len(), "length of dst slice must match");
         assert!(size_of::<T>() == size_of::<MaybeUninit<T>>());
         // SAFETY: We know T is same layout as MaybeUninit<T> and T is GpuNum so all bit patterns are valid
+        // so any data written to dst will be valid
         let dst = unsafe { dst.align_to_mut::<MaybeUninit<T>>().1 };
         self.copy_to_cpu_internal(range, dst);
     }

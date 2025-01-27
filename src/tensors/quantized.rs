@@ -16,14 +16,29 @@ pub enum Dim {
 pub struct QuantizedTensor {
     data: GpuVec<u32>,
     shape: [usize; 2],
-    scales: GpuVec<f32>,
-    zero_point: f32, // for all scales
-    scales_dim: Dim, //which dimension is quantized, each scale will aply to eather column or row
+    params: QuantizationParams,
     quant_type: QuantType,
 }
 
+// https://pytorch.org/blog/quantization-in-practice/#per-tensor-and-per-channel-quantization-schemes
+#[derive(Clone, Debug)]
+enum QuantizationParams {
+    /// Symetric: real_val = scale[x or y] * quantized_val
+    SymetricPerStripe {
+        scales: GpuVec<f32>,
+        scales_dim: Dim, //which dimension is quantized, each scale will apply to eather column or row
+    },
+    /// Symetric: real_val = scale * quantized_val
+    SymetricGlobal { scale: f32 },
+    /// todo, not implemented
+    AsymetricGlobal {
+        scale: f32,
+        zero_point: f32, // for all scales
+    },
+}
+
 impl QuantizedTensor {
-    pub fn quantize(tensor: &GpuTensor<f32>, quant_type: QuantType, scales_dim: Dim) -> Self {
+    pub fn quantize(tensor: &GpuTensor<f32>, quant_type: QuantType, scales_dim: Option<Dim>) -> Self {
         todo!()
     }
 

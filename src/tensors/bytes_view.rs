@@ -41,6 +41,11 @@ impl<T: GpuNum> BytesView<T> {
             return Err(prev.len());
         }
         let aligned_items = aligned_items.len();
+        if aligned_items == 0 {
+            return Ok(Self {
+                repr: ViewRepr::Mapped(Bytes::new(), 0),
+            });
+        }
         Ok(Self {
             repr: ViewRepr::Mapped(data, aligned_items),
         })
@@ -70,10 +75,11 @@ impl<T: GpuNum> BytesView<T> {
 impl<T: GpuNum> Deref for BytesView<T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
-        // SAFETY: T is GpuNum which is sealed and all field patterns are valid in it, we checked items size in try_new
         match &self.repr {
+            // SAFETY: T is GpuNum which is sealed and all bit patterns are valid in it, we checked items size and align of data in try_new
             ViewRepr::Mapped(data, items) => unsafe {
                 let ptr = data.as_ptr() as *const T;
+                debug_assert!(ptr.is_aligned());
                 std::slice::from_raw_parts(ptr, *items)
             },
             ViewRepr::Box(data) => data,

@@ -4,14 +4,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod llama;
 mod nn;
 mod tensors;
 
 use bytes::Bytes;
 use safetensors::{tensor, SafeTensors, View};
-use tensors::{GpuTensor, MatrixMulIndexes};
+use tensors::GpuTensor;
 
-fn memory_map_file(path: &Path) -> Bytes {
+fn memory_map_file_unchecked(path: &Path) -> Bytes {
     let file = File::open(path).unwrap();
     let mmap = unsafe { memmap2::MmapOptions::new().map(&file).unwrap() };
     Bytes::from_owner(mmap) // doesn't copy any memory
@@ -32,7 +33,7 @@ fn tensor_files_in(dir: &Path) -> Vec<PathBuf> {
         .filter_map(|entry| {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.is_file() && path.extension().unwrap() == "safetensors" {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "safetensors") {
                 Some(path)
             } else {
                 None
@@ -44,18 +45,18 @@ fn tensor_files_in(dir: &Path) -> Vec<PathBuf> {
 // https://github.com/kurtschelfthout/tensorken/blob/v0.2/src/raw_tensor_wgpu.rs
 fn scan_safetensors() {
     let mut shapes = Vec::new();
-    for path in tensor_files_in(Path::new(TEST_FILES_PATH2)) {
+    for path in tensor_files_in(Path::new(TEST_FILES_PATH)) {
         println!("Path {}", path.display());
-        let mmap = memory_map_file(&path);
+        let mmap = memory_map_file_unchecked(&path);
         let tensors = SafeTensors::deserialize(&mmap).unwrap();
         let tens = tensors.tensors();
         println!("{} tensors", tens.len());
         for (name, tensor) in tens {
-            shapes.push(tensor.shape().to_vec());
+            shapes.push((tensor.shape().to_vec(), tensor.dtype()));
             println!("{}: dtype:{:?}, shape:{:?}", name, tensor.dtype(), tensor.shape());
         }
     }
-    let diff_shapes = shapes.into_iter().collect::<std::collections::HashSet<_>>();
+    let diff_shapes = shapes.into_iter().collect::<std::collections::BTreeSet<_>>();
     println!("unique shapes {:?}", diff_shapes);
 }
 fn main() {
@@ -68,4 +69,5 @@ fn main() {
 
     //let result = GpuTensor::matrix_mul_native(&data1, &data2, indexes).await;
     //println!("result: {result:?}");
+    scan_safetensors();
 }

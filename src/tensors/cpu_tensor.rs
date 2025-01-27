@@ -10,6 +10,10 @@ pub struct CpuTensor<T: GpuNum> {
 }
 
 impl<T: GpuNum> CpuTensor<T> {
+    pub fn new_view(data: BytesView<T>, shape: [usize; 2]) -> Self {
+        assert!(data.len() == shape[0] * shape[1], "data length must be equal to shape[0] * shape[1]");
+        Self { data, shape }
+    }
     pub fn new(data: &[impl AsRef<[T]>]) -> Self {
         let x = data.len();
         let mut y = None;

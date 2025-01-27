@@ -197,6 +197,13 @@ fn sigmoid_activation(val: f32) -> f32 {
     return 1.0 / (1.0 + exp(-val));
 }
 
+fn unpack_bf16_to_f32(val: u32) -> vec2f {
+    let va = bitcast<f32>(bitcast<u32>(val & 0xFFFF) << 16);
+    let vb = bitcast<f32>(bitcast<u32>(val >> 16));
+    return vec2f(va, vb);
+}
+
+
 @compute
 @pipeline_workgroup_size
 fn #ENTRY_FUNC_NAME(@builtin(global_invocation_id) global_id: vec3<u32>) {
