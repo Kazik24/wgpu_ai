@@ -1,4 +1,4 @@
-use std::{alloc::Layout, fmt::Display, hash::Hash, i32, mem::transmute};
+use std::{alloc::Layout, fmt::Display, hash::Hash, i32, mem::transmute, ops::*};
 
 use super::{AnyGpuTensor, AnyGpuTensorRef, FlowFunc, GpuTensor, HashF32};
 
@@ -37,9 +37,23 @@ impl NumType {
 trait Sealed {}
 
 #[allow(private_bounds)]
-pub trait GpuNum: std::fmt::Debug + Display + Sealed + Clone + Copy + Send + Sync + 'static {
+pub trait GpuNum: Sealed + std::fmt::Debug + Display + Clone + Copy + Send + Sync + 'static
+where
+    Self: PartialEq + PartialOrd,
+    Self: Add<Output = Self> + AddAssign + Sub<Output = Self> + SubAssign,
+    Self: Mul<Output = Self> + MulAssign + Div<Output = Self> + DivAssign + Rem<Output = Self> + RemAssign,
+{
     fn zero() -> Self;
     fn one() -> Self;
+    fn from_f32(f: f32) -> Self {
+        Self::from_any(AnyGpuNum::F32(f))
+    }
+    fn from_i32(i: i32) -> Self {
+        Self::from_any(AnyGpuNum::I32(i))
+    }
+    fn from_u32(u: u32) -> Self {
+        Self::from_any(AnyGpuNum::U32(u))
+    }
     fn as_f32(&self) -> f32 {
         self.as_any().into()
     }
