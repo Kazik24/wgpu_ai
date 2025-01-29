@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crate::tensors::{CpuTensor, GpuTensor, Tensor};
 
 pub struct Transformer {
@@ -15,33 +17,83 @@ impl Transformer {
     }
 }
 
-struct TransformerLayer {
-    // Attention
-    weights_query: CpuTensor<f32>,  //wq
-    weights_key: CpuTensor<f32>,    //wk
-    weights_value: CpuTensor<f32>,  //wv
-    weights_output: CpuTensor<f32>, //wo
+#[repr(C, packed)]
+#[derive(Debug, Copy, Clone)]
+pub struct TransformerArgs {
+    pub attn_rms_norm_epsilon: f32, // epsilon for rms norm operation at the start of each layer (before attention layer)
+    pub attn_head_size: usize,      // size of the vector comming out of the key/query projection
+    pub attn_heads: usize,          // number of attention heads
+    pub n_key_value_heads: usize,   // number of key/value heads
 
-    rms_norm_epsilon: f32,
-    rms_norm_add_unit_offset: bool,        // always false for Llama, true for Gemma
-    weights_rms_attention: CpuTensor<f32>, //w_rms_att [1, token_dim]
+    dim: u32,
+    hidden_dim: u32,
+    n_layers: u32,
+    n_heads: u32,
+    head_size: u32,
+    n_kv_heads: u32,
+    pub vocab_size: u32,
+    seq_len: u32,
+
+    rope_theta: f32,
+    group_size: u32,
+    pub multimodal: bool,
+}
+
+pub struct LayerState {
+    key_cache: VecDeque<Tensor<f32>>,
+    value_cache: VecDeque<Tensor<f32>>,
+}
+
+struct TransformerLayer {
+    args: TransformerArgs,
+
+    // Attention
+    weights_query: Tensor<f32>,  //wq
+    weights_key: Tensor<f32>,    //wk
+    weights_value: Tensor<f32>,  //wv
+    weights_output: Tensor<f32>, //wo
+
+    rms_norm_add_unit_offset: bool,     // always false for Llama, true for Gemma
+    weights_rms_attention: Tensor<f32>, //w_rms_att [1, token_dim]
 
     // FFN
-    mlp_gate_proj: CpuTensor<f32>, //w1
-    mlp_down_proj: CpuTensor<f32>, // w2
-    mlp_up_proj: CpuTensor<f32>,   // w3
+    mlp_gate_proj: Tensor<f32>, //w1
+    mlp_down_proj: Tensor<f32>, // w2
+    mlp_up_proj: Tensor<f32>,   // w3
 
-                                   //  w_rms_post_att: Tensor<'a>,
+                                //  w_rms_post_att: Tensor<'a>,
 
-                                   //  w_rms_pre_ffn: Option<Tensor<'a>>,
-                                   //  w_rms_post_ffn: Option<Tensor<'a>>,
+                                //  w_rms_pre_ffn: Option<Tensor<'a>>,
+                                //  w_rms_post_ffn: Option<Tensor<'a>>,
 
-                                   //  w_rms_final: Tensor<'a>,
+                                //  w_rms_final: Tensor<'a>,
 }
 
 impl TransformerLayer {
     // input tensor shape: [1, token_dim], where 1 is a token count in current residual stream
-    pub fn forward(&self, x: &mut CpuTensor<f32>, token_pos: u32) {
-        x.rmsnorm(&self.weights_rms_attention, self.rms_norm_epsilon, self.rms_norm_add_unit_offset);
+    pub fn forward(&self, residual_stream: &mut Tensor<f32>, token_pos: u32) {
+        let mut x = residual_stream.clone();
+
+        // apply attention and produce delta change
+        self.attention_block(&mut x, token_pos);
+        // add delta to residual stream
+        residual_stream.elementwise_add_assign(&x);
+        x.copy_from(residual_stream); //update x to new residual stream
+
+        // apply MLP
+    }
+
+    fn attention_block(&self, x: &mut Tensor<f32>, token_pos: u32) {
+        //apply normalization before doing anything else
+        x.rmsnorm(&self.weights_rms_attention, self.args.attn_rms_norm_epsilon, self.rms_norm_add_unit_offset);
+
+        let key_value_dim = self.args.attn_head_size * self.args.n_key_value_heads;
+        let attention_dim = self.args.attn_head_size * self.args.attn_heads;
+        let mut key = Tensor::<f32>::empty([1, key_value_dim]); // will be cached
+        let mut value = Tensor::<f32>::empty([1, key_value_dim]); // will be cached
+        let mut query = Tensor::<f32>::empty([1, attention_dim]);
+
+        x.matrix_mul_assign(&self.weights_query, &mut query);
+        x.matrix_mul_assign(&self.weights_key, &mut key);
     }
 }

@@ -13,7 +13,7 @@ use crate::tensors::wgpu_context::WgpuContext;
 use super::{
     op, op_inplace,
     pipelines::{self, WorkgroupSize},
-    ActivationType, AnyGpuNum, FlowFunc, GpuNum, GpuVec, NumType, PipelineType,
+    ActivationType, AnyGpuNum, FlowFunc, GpuNum, GpuVec, NumType, PipelineType, TensorType,
 };
 
 pub enum AnyGpuTensor {
@@ -151,16 +151,19 @@ impl<T: GpuNum> GpuTensor<T> {
         Self { data, shape }
     }
 
-    pub fn get_array(&self) -> Vec<Box<[T]>> {
+    pub fn get_rows(&self) -> Vec<Box<[T]>> {
         let data = self.data.to_cpu(..);
         data.chunks_exact(self.shape[1]).map(|c| c.to_vec().into_boxed_slice()).collect()
     }
+    pub fn get_array(&self) -> Vec<T> {
+        self.data.to_cpu(..)
+    }
 
     /// Shape of the tensor, [rows, cols]
-    pub fn shape(&self) -> [usize; 2] {
+    pub const fn shape(&self) -> [usize; 2] {
         self.shape
     }
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.shape[0] * self.shape[1]
     }
 
@@ -218,6 +221,10 @@ impl<T: GpuNum> GpuTensor<T> {
             NumType::F32 => FlowFunc::Argument(0, NumType::F32).activation(activation),
             ty => FlowFunc::Argument(0, ty).cast_to(NumType::F32).activation(activation), //double cast
         })
+    }
+
+    pub fn elementwise_add_assign(&mut self, other: &Self) {
+        self.apply_assign2(other, FlowFunc::Argument(0, T::num_type()) + FlowFunc::Argument(1, T::num_type()))
     }
 
     pub fn gated_activation_assign<A: GpuNum>(&mut self, activation: ActivationType, mul_activation_by_elementwise: &GpuTensor<A>) {
@@ -295,7 +302,7 @@ impl<T: GpuNum> GpuTensor<T> {
 impl<T: GpuNum> Debug for GpuTensor<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "GpuTensor<{}>[", T::num_type().gpu_type())?;
-        let array = self.get_array();
+        let array = self.get_rows();
         for row in array {
             writeln!(f, "    {row:?},")?;
         }
@@ -379,16 +386,16 @@ mod tests {
         ] {
             let mut tensor = GpuTensor::new(&[&data]);
             tensor.activation_assign(act);
-            let values = tensor.get_array()[0].clone();
+            let values = tensor.get_rows()[0].clone();
             assert!(vec.iter().zip(values).all(|(a, b)| (a - b).abs() < 0.000001));
 
             tensor = GpuTensor::new(&[&data]);
             tensor.activation_assign(act);
-            let values = tensor.get_array()[0].clone();
+            let values = tensor.get_rows()[0].clone();
             assert!(vec.iter().zip(values).all(|(a, b)| (a - b).abs() < 0.000001));
 
             tensor = GpuTensor::new(&[&data]).activation(act);
-            let values = tensor.get_array()[0].clone();
+            let values = tensor.get_rows()[0].clone();
             assert!(vec.iter().zip(values).all(|(a, b)| (a - b).abs() < 0.000001));
         }
         println!("time: {:.03?}", start.elapsed());
@@ -432,17 +439,17 @@ mod tests {
         ] {
             let mut tensor = GpuTensor::new(&[&data]);
             tensor.gated_activation_assign(act, &GpuTensor::new(&[&gate]));
-            let values = tensor.get_array()[0].clone();
+            let values = tensor.get_rows()[0].clone();
             assert!(vec.iter().zip(values).all(|(a, b)| (a - b).abs() < 0.0001));
 
             tensor = GpuTensor::new(&[&data]);
             let mut result = GpuTensor::new(&[&gate]);
             tensor.gated_activation_assign_gate(act, &mut result);
-            let values = result.get_array()[0].clone();
+            let values = result.get_rows()[0].clone();
             assert!(vec.iter().zip(values).all(|(a, b)| (a - b).abs() < 0.0001));
 
             let tensor = GpuTensor::new(&[&data]).gated_activation(act, &GpuTensor::new(&[&gate]));
-            let values = tensor.get_array()[0].clone();
+            let values = tensor.get_rows()[0].clone();
             assert!(vec.iter().zip(values).all(|(a, b)| (a - b).abs() < 0.0001));
         }
         println!("time: {:.03?}", start.elapsed());

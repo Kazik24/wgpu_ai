@@ -1,15 +1,24 @@
+use std::borrow::Cow;
+
 use rayon::prelude::*;
 use wide::f32x8;
 
-use super::{ActivationType, BytesView, GpuNum};
+use super::{ActivationType, BytesView, GpuNum, GpuTensor};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CpuTensor<T: GpuNum> {
     data: BytesView<T>,
     shape: [usize; 2], // [rows, cols], memory is alinged in rows one after another, so pliting by rows results in continous slices
 }
 
 impl<T: GpuNum> CpuTensor<T> {
+    pub fn to_gpu_tensor(&self) -> GpuTensor<T> {
+        GpuTensor::from_shape(&*self.data, self.shape)
+    }
+    pub fn from_gpu_tensor(src: &GpuTensor<T>) -> Self {
+        let array = src.get_array();
+        Self::from_shape(Cow::Owned(array), src.shape())
+    }
     pub fn new_view(data: BytesView<T>, shape: [usize; 2]) -> Self {
         assert!(data.len() == shape[0] * shape[1], "data length must be equal to shape[0] * shape[1]");
         assert!(shape[0] * shape[1] > 0, "empty data");
@@ -39,6 +48,15 @@ impl<T: GpuNum> CpuTensor<T> {
         }
     }
 
+    pub fn from_shape(data: Cow<[T]>, shape: [usize; 2]) -> Self {
+        let size = shape[0] * shape[1];
+        if size != data.len() {
+            panic!("data length must be equal to shape[0] * shape[1]");
+        }
+        let data = BytesView::from_slice(data.into_owned().into_boxed_slice());
+        Self { data, shape }
+    }
+
     pub fn empty(shape: [usize; 2]) -> Self {
         assert!(shape[0] > 0 && shape[1] > 0, "shape must be greater than 0");
         let size = shape[0] * shape[1];
@@ -56,6 +74,9 @@ impl<T: GpuNum> CpuTensor<T> {
     pub const fn len(&self) -> usize {
         self.shape[0] * self.shape[1]
     }
+    pub fn get_array(&self) -> &[T] {
+        &self.data
+    }
 }
 
 impl<T: GpuNum> CpuTensor<T> {
@@ -70,6 +91,72 @@ impl<T: GpuNum> CpuTensor<T> {
             }
         }
         max
+    }
+
+    pub fn elementwise_mul_assign(&mut self, other: &Self) {
+        self.apply_elementwise_assign(other, |a, b| a * b);
+    }
+    pub fn elementwise_add_assign(&mut self, other: &Self) {
+        self.apply_elementwise_assign(other, |a, b| a + b);
+    }
+
+    pub fn to_f32(&self) -> CpuTensor<f32> {
+        let dim = self.shape[0].max(self.shape[1]);
+        let mut out = CpuTensor::empty([self.shape[0], self.shape[1]]);
+        self.data.par_chunks(dim).zip(out.data.par_chunks_mut(dim)).for_each(|(a, b)| {
+            for (a, b) in a.iter().zip(b) {
+                *b = a.as_f32();
+            }
+        });
+        out
+    }
+
+    pub fn activation_assign(&mut self, activation: ActivationType) {
+        match activation {
+            ActivationType::ReLU => self.apply_elementwise(|v| if v < T::zero() { T::zero() } else { v }),
+            ActivationType::SiLU => self.apply_elementwise(|val| {
+                let mut val = val.as_f32();
+                val *= 1.0 / (1.0 + (-val).exp());
+                T::from_f32(val)
+            }),
+            ActivationType::GeLU => self.apply_elementwise(|val| {
+                let mut val = val.as_f32();
+                val *= 0.5 * (1.0 + ((0.7978845608028654 * (val + 0.044715 * val * val * val) as f64).tanh()) as f32);
+                T::from_f32(val)
+            }),
+            ActivationType::Sigmoid => self.apply_elementwise(|val| {
+                let mut val = val.as_f32();
+                val = 1.0 / (1.0 + (-val).exp());
+                T::from_f32(val)
+            }),
+        }
+    }
+
+    fn apply_elementwise(&mut self, func: impl Fn(T) -> T + Send + Sync) {
+        let dim = self.shape[0].max(self.shape[1]);
+        self.data.par_chunks_mut(dim).for_each(|a| {
+            for i in a.iter_mut() {
+                *i = func(*i);
+            }
+        });
+    }
+
+    fn apply_elementwise_assign(&mut self, other: &Self, func: impl Fn(T, T) -> T + Send + Sync) {
+        assert!(self.shape == other.shape, "shapes must be equal");
+        let dim = self.shape[0].max(self.shape[1]);
+        self.data.par_chunks_mut(dim).zip(other.data.par_chunks(dim)).for_each(|(a, b)| {
+            for (a, b) in a.iter_mut().zip(b) {
+                *a = func(*a, *b);
+            }
+        });
+    }
+
+    pub fn copy_to(&self, dst: &mut Self) {
+        assert!(self.shape() == dst.shape(), "tensors must be the same shape");
+        dst.data.copy_from_slice(&self.data);
+    }
+    pub fn copy_from(&mut self, src: &Self) {
+        src.copy_to(self);
     }
 
     pub fn softmax(&mut self) {

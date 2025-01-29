@@ -53,6 +53,9 @@ fn scan_safetensors() {
         println!("{} tensors", tens.len());
         for (name, tensor) in tens {
             shapes.push((tensor.shape().to_vec(), tensor.dtype()));
+            if !name.contains("layers.0") {
+                continue;
+            }
             println!("{}: dtype:{:?}, shape:{:?}", name, tensor.dtype(), tensor.shape());
         }
     }
@@ -71,3 +74,14 @@ fn main() {
     //println!("result: {result:?}");
     scan_safetensors();
 }
+// model.layers.0.input_layernorm.weight: dtype:F16, shape:[4096]
+// model.layers.0.self_attn.k_proj.weight: dtype:F16, shape:[1024, 4096]
+// model.layers.0.self_attn.v_proj.weight: dtype:F16, shape:[1024, 4096]
+// model.layers.0.self_attn.q_proj.weight: dtype:F16, shape:[4096, 4096]
+
+// model.layers.0.self_attn.o_proj.weight: dtype:F16, shape:[4096, 4096]
+
+// model.layers.0.mlp.down_proj.weight: dtype:F16, shape:[4096, 14336]
+// model.layers.0.mlp.gate_proj.weight: dtype:F16, shape:[14336, 4096]
+// model.layers.0.mlp.up_proj.weight: dtype:F16, shape:[14336, 4096]
+// model.layers.0.post_attention_layernorm.weight: dtype:F16, shape:[4096]
