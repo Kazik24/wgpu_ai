@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use half::bf16;
 use rayon::prelude::*;
 use wide::f32x8;
 
@@ -203,6 +204,15 @@ impl CpuTensor<f32> {
             rmsnorm(xb, weight, eps, add_unit_offset);
         });
     }
+    pub fn rmsnorm_bf16(&mut self, weight: &CpuTensor<bf16>, eps: f32, add_unit_offset: bool) {
+        assert!(self.shape[1] == self.shape[1] && weight.shape[0] == 1, "weight must have shape [1, cols]");
+        let rows = self.rows();
+        let weight = &*weight.data;
+
+        self.data.par_chunks_mut(rows).enumerate().for_each(|(i, xb)| {
+            rmsnorm_bf16(xb, weight, eps, add_unit_offset);
+        });
+    }
 }
 
 fn matmul(xout: &mut [f32], x: &[f32], w: &[f32], n: usize, o: usize) {
@@ -265,6 +275,25 @@ fn rmsnorm(x: &mut [f32], weight: &[f32], eps: f32, add_unit_offset: bool) {
 
         for k in 0..8 {
             x[(j * 8) + k] = r[k];
+        }
+    }
+}
+
+fn rmsnorm_bf16(x: &mut [f32], weight: &[bf16], eps: f32, add_unit_offset: bool) {
+    let size = x.len();
+
+    let mut ss = x.iter().copied().map(|x| x * x).sum::<f32>();
+    ss /= size as f32;
+    ss += eps;
+    ss = 1.0 / ss.sqrt();
+
+    if add_unit_offset {
+        for (xi, wi) in x.iter_mut().zip(weight) {
+            *xi = (1.0 + wi.to_f32()) * (ss * *xi);
+        }
+    } else {
+        for (xi, wi) in x.iter_mut().zip(weight) {
+            *xi = wi.to_f32() * (ss * *xi);
         }
     }
 }

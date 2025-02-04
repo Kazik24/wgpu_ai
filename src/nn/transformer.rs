@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::tensors::{CpuTensor, GpuTensor, Tensor};
+use crate::tensors::{ActivationType, CpuTensor, GpuTensor, Tensor};
 
 pub struct Transformer {
     output_logits: Vec<f32>,
@@ -21,6 +21,7 @@ impl Transformer {
 #[derive(Debug, Copy, Clone)]
 pub struct TransformerArgs {
     pub attn_rms_norm_epsilon: f32, // epsilon for rms norm operation at the start of each layer (before attention layer)
+    pub mlp_rms_norm_epsilon: f32,  // epsilon for rms norm operation after attention before mlp (should be thesame as attn_rms_norm_epsilon)
     pub attn_head_size: usize,      // size of the vector comming out of the key/query projection
     pub attn_heads: usize,          // number of attention heads
     pub n_key_value_heads: usize,   // number of key/value heads
@@ -57,19 +58,20 @@ struct TransformerLayer {
     weights_rms_attention: Tensor<f32>, //w_rms_att [1, token_dim]
 
     // FFN
-    mlp_gate_proj: Tensor<f32>, //w1
-    mlp_down_proj: Tensor<f32>, // w2
-    mlp_up_proj: Tensor<f32>,   // w3
+    weight_rms_mlp: Tensor<f32>, //w_rms_post_att [1, token_dim]
+    mlp_gate_proj: Tensor<f32>,  //w1
+    mlp_down_proj: Tensor<f32>,  // w2
+    mlp_up_proj: Tensor<f32>,    // w3
 
-                                //  w_rms_post_att: Tensor<'a>,
+                                 //  w_rms_pre_ffn: Option<Tensor<'a>>,
+                                 //  w_rms_post_ffn: Option<Tensor<'a>>,
 
-                                //  w_rms_pre_ffn: Option<Tensor<'a>>,
-                                //  w_rms_post_ffn: Option<Tensor<'a>>,
-
-                                //  w_rms_final: Tensor<'a>,
+                                 //  w_rms_final: Tensor<'a>,
 }
 
 impl TransformerLayer {
+    // todo description of llama: https://pub.towardsai.net/build-your-own-llama-3-architecture-from-scratch-using-pytorch-2ce1ecaa901c
+
     // input tensor shape: [1, token_dim], where 1 is a token count in current residual stream
     pub fn forward(&self, residual_stream: &mut Tensor<f32>, token_pos: u32) {
         let mut x = residual_stream.clone();
@@ -80,7 +82,10 @@ impl TransformerLayer {
         residual_stream.elementwise_add_assign(&x);
         x.copy_from(residual_stream); //update x to new residual stream
 
-        // apply MLP
+        // apply MLP and produce delta change
+        self.mlp_block(&mut x);
+        // add delta to residual stream
+        residual_stream.elementwise_add_assign(&x);
     }
 
     fn attention_block(&self, x: &mut Tensor<f32>, token_pos: u32) {
@@ -95,5 +100,20 @@ impl TransformerLayer {
 
         x.matrix_mul_assign(&self.weights_query, &mut query);
         x.matrix_mul_assign(&self.weights_key, &mut key);
+        x.matrix_mul_assign(&self.weights_value, &mut value);
+    }
+
+    fn mlp_block(&self, x: &mut Tensor<f32>) {
+        x.rmsnorm(&self.weight_rms_mlp, self.args.mlp_rms_norm_epsilon, self.rms_norm_add_unit_offset);
+
+        //project up
+        let mut hidden = x.matrix_mul(&self.mlp_up_proj);
+        let gate = x.matrix_mul(&self.mlp_gate_proj);
+
+        // gate/activation
+        hidden.gated_activation_assign(ActivationType::SiLU, &gate);
+
+        //project down
+        hidden.matrix_mul_assign(&self.mlp_down_proj, x);
     }
 }

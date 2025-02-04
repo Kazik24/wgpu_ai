@@ -183,6 +183,15 @@ fn matrix_mul(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 "###;
 
+fn custom_matrix_mul_template(dot_accumulate_func: FlowFunc, modify_func: FlowFunc) -> String {
+    const SHADER_CODE: &str = r###"
+
+
+
+"###;
+    SHADER_CODE.to_string()
+}
+
 fn elementwise_shader_template(args: &[(NumType, bool, bool)], func_expr: String, entry_name: &str, out_arg: Option<u8>, out_type: NumType) -> String {
     const SHADER_CODE: &str = r###"
 @VAR_DEFS

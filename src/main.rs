@@ -1,6 +1,7 @@
 #![allow(unused)]
 use std::{
     fs::File,
+    ops::Index,
     path::{Path, PathBuf},
 };
 
@@ -9,8 +10,11 @@ mod nn;
 mod tensors;
 
 use bytes::Bytes;
+use half::bf16;
+use nn::Stats;
+use rayon::{iter::ParallelIterator, slice::ParallelSlice};
 use safetensors::{tensor, SafeTensors, View};
-use tensors::GpuTensor;
+use tensors::{BytesView, GpuTensor};
 
 fn memory_map_file_unchecked(path: &Path) -> Bytes {
     let file = File::open(path).unwrap();
@@ -19,13 +23,15 @@ fn memory_map_file_unchecked(path: &Path) -> Bytes {
 }
 
 #[cfg(target_os = "linux")]
-const MODELS_DIR: &str = "/mnt/d/MyFolder/Projekty/rust_lm.rs/models";
+const MODELS_DIR: &str = "/mnt/d/MyFolder/Projekty/ai_models";
 #[cfg(target_os = "windows")]
-const MODELS_DIR: &str = "D:/MyFolder/Projekty/rust_lm.rs/models";
+const MODELS_DIR: &str = "D:/MyFolder/Projekty/ai_models";
 
 const TEST_FILES_PATH: &str = constcat::concat!(MODELS_DIR, "/LLama-3-8b-Uncensored");
 const TEST_FILES_PATH2: &str = constcat::concat!(MODELS_DIR, "/CodeQwen");
 const TEST_FILES_PATH3: &str = constcat::concat!(MODELS_DIR, "/whisper");
+const TEST_FILES_DEEPSEEK: &str = constcat::concat!(MODELS_DIR, "/deepseek-r1");
+const TEST_FILES_DS_LLAMA: &str = constcat::concat!(MODELS_DIR, "/DeepSeek-R1-Distill-Llama-8B");
 
 fn tensor_files_in(dir: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(dir)
@@ -45,7 +51,8 @@ fn tensor_files_in(dir: &Path) -> Vec<PathBuf> {
 // https://github.com/kurtschelfthout/tensorken/blob/v0.2/src/raw_tensor_wgpu.rs
 fn scan_safetensors() {
     let mut shapes = Vec::new();
-    for path in tensor_files_in(Path::new(TEST_FILES_PATH)) {
+    let mut all_stats = Stats::new();
+    for path in tensor_files_in(Path::new(TEST_FILES_DS_LLAMA)) {
         println!("Path {}", path.display());
         let mmap = memory_map_file_unchecked(&path);
         let tensors = SafeTensors::deserialize(&mmap).unwrap();
@@ -53,15 +60,21 @@ fn scan_safetensors() {
         println!("{} tensors", tens.len());
         for (name, tensor) in tens {
             shapes.push((tensor.shape().to_vec(), tensor.dtype()));
-            if !name.contains("layers.0") {
-                continue;
-            }
-            println!("{}: dtype:{:?}, shape:{:?}", name, tensor.dtype(), tensor.shape());
+            // if !name.contains("layers.0") {
+            //     continue;
+            // }
+            let bytes = mmap.slice_ref(tensor.data());
+            let view = BytesView::<bf16>::new_mapped(bytes);
+            let stats = Stats::compute(&view);
+            all_stats.append(stats);
+            println!("{}: dtype:{:?}, shape:{:?}, stats: {}", name, tensor.dtype(), tensor.shape(), stats.print(3));
         }
     }
     let diff_shapes = shapes.into_iter().collect::<std::collections::BTreeSet<_>>();
     println!("unique shapes {:?}", diff_shapes);
+    println!("all stats: {}", all_stats.print(6));
 }
+
 fn main() {
     let data1 = (0..512).map(|v| v as f32).collect::<Vec<_>>();
     let data2 = (0..512).map(|v| v as f32).collect::<Vec<_>>();

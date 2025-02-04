@@ -150,6 +150,8 @@ impl FlowFunc {
             NumType::F32 => Self::ConstF32(HashF32(self.const_as_f32())),
             NumType::I32 => Self::ConstI32(self.const_as_i32()),
             NumType::U32 => Self::ConstU32(self.const_as_u32()),
+            NumType::F16 => unimplemented!(),
+            NumType::BF16 => unimplemented!(),
         }
     }
 

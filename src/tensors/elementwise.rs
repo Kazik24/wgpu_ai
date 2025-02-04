@@ -144,6 +144,8 @@ fn runtime_op_internal(args: &[AnyGpuTensorRef], in_place: Option<u8>, func: Flo
             NumType::F32 => Some(AnyGpuTensor::F32(GpuTensor::empty(shape))),
             NumType::I32 => Some(AnyGpuTensor::I32(GpuTensor::empty(shape))),
             NumType::U32 => Some(AnyGpuTensor::U32(GpuTensor::empty(shape))),
+            NumType::F16 => unimplemented!(),
+            NumType::BF16 => unimplemented!(),
         },
     };
 

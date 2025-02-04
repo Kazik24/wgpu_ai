@@ -109,6 +109,10 @@ impl<T: GpuNum> Tensor<T> {
             }
         }
     }
+    pub fn into_cpu(mut self) -> Self {
+        self.to_cpu();
+        self
+    }
     pub fn to_cpu_from(src: &GpuTensor<T>) -> Self {
         let array = src.get_array();
         Self::Cpu(CpuTensor::from_shape(Cow::Owned(array), src.shape()))
@@ -125,6 +129,10 @@ impl<T: GpuNum> Tensor<T> {
                 }
             }
         }
+    }
+    pub fn into_gpu(mut self) -> Self {
+        self.to_gpu();
+        self
     }
     pub fn to_gpu_from(src: &CpuTensor<T>) -> Self {
         let array = src.get_array();
@@ -179,6 +187,24 @@ impl<T: GpuNum> Tensor<T> {
                 Tensor::Cpu(t)
             }
             Self::Gpu(t) => Tensor::Gpu(t.activation(activation)),
+        }
+    }
+
+    pub fn gated_activation_assign(&mut self, activation: ActivationType, gate: &Self) {
+        match (self, gate) {
+            (Self::Gpu(t), Self::Gpu(g)) => t.gated_activation_assign(activation, g),
+            (Self::Cpu(t), Self::Cpu(g)) => {
+                t.activation_assign(activation);
+                t.elementwise_mul_assign(g);
+            }
+            (Self::Gpu(t), Self::Cpu(g)) => {
+                let g = g.to_gpu_tensor();
+                t.gated_activation_assign(activation, &g);
+            }
+            (Self::Cpu(t), Self::Gpu(g)) => {
+                t.activation_assign(activation);
+                t.elementwise_mul_assign(&CpuTensor::from_gpu_tensor(g));
+            }
         }
     }
 }
