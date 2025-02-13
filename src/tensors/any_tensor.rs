@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use half::bf16;
+
 use super::{ActivationType, BytesView, CpuTensor, FlowFunc, GpuNum, GpuTensor};
 
 #[derive(Debug, Clone)]
@@ -242,6 +244,16 @@ impl Tensor<f32> {
                 let mut w = w.clone();
                 let w = w.to_cpu();
                 a.to_cpu().rmsnorm(&w, eps, add_unit_offset);
+            }
+        }
+    }
+    pub fn rmsnorm_bf16(&mut self, weight: &Tensor<bf16>, eps: f32, add_unit_offset: bool) {
+        match (self, weight) {
+            (Self::Cpu(t1), Tensor::Cpu(t2)) => t1.rmsnorm_bf16(t2, eps, add_unit_offset),
+            (a, w) => {
+                let mut w = w.clone();
+                let w = w.to_cpu();
+                a.to_cpu().rmsnorm_bf16(&w, eps, add_unit_offset);
             }
         }
     }

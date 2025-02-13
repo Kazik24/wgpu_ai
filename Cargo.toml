@@ -15,8 +15,9 @@ fxhash = "0.2.1"
 
 serde = "1"
 rayon = "1"
-bytes = "1"
+elems = { git = "https://github.com/Kazik24/elems.git" }
 half = "2"
+float8 = "0.1.3"
 
 
 [profile.release]

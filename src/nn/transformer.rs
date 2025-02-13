@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+use half::bf16;
+
 use crate::tensors::{ActivationType, CpuTensor, GpuTensor, Tensor};
 
 pub struct Transformer {
@@ -55,10 +57,10 @@ struct TransformerLayer {
     weights_output: Tensor<f32>, //wo
 
     rms_norm_add_unit_offset: bool,     // always false for Llama, true for Gemma
-    weights_rms_attention: Tensor<f32>, //w_rms_att [1, token_dim]
+    weights_rms_attention: Tensor<bf16>, //w_rms_att [1, token_dim]
 
     // FFN
-    weight_rms_mlp: Tensor<f32>, //w_rms_post_att [1, token_dim]
+    weight_rms_mlp: Tensor<bf16>, //w_rms_post_att [1, token_dim]
     mlp_gate_proj: Tensor<f32>,  //w1
     mlp_down_proj: Tensor<f32>,  // w2
     mlp_up_proj: Tensor<f32>,    // w3
@@ -90,7 +92,7 @@ impl TransformerLayer {
 
     fn attention_block(&self, x: &mut Tensor<f32>, token_pos: u32) {
         //apply normalization before doing anything else
-        x.rmsnorm(&self.weights_rms_attention, self.args.attn_rms_norm_epsilon, self.rms_norm_add_unit_offset);
+        x.rmsnorm_bf16(&self.weights_rms_attention, self.args.attn_rms_norm_epsilon, self.rms_norm_add_unit_offset);
 
         let key_value_dim = self.args.attn_head_size * self.args.n_key_value_heads;
         let attention_dim = self.args.attn_head_size * self.args.attn_heads;
@@ -104,7 +106,7 @@ impl TransformerLayer {
     }
 
     fn mlp_block(&self, x: &mut Tensor<f32>) {
-        x.rmsnorm(&self.weight_rms_mlp, self.args.mlp_rms_norm_epsilon, self.rms_norm_add_unit_offset);
+        x.rmsnorm_bf16(&self.weight_rms_mlp, self.args.mlp_rms_norm_epsilon, self.rms_norm_add_unit_offset);
 
         //project up
         let mut hidden = x.matrix_mul(&self.mlp_up_proj);

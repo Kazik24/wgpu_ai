@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use bytes::Bytes;
+use elems::Bytes;
 
 use crate::tensors::GpuNum;
 
