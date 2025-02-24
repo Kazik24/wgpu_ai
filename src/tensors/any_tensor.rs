@@ -24,7 +24,11 @@ impl<T: GpuNum> Tensor<T> {
         }
     }
 
-    pub fn new_view(data: BytesView<T>, shape: [usize; 2]) -> Self {
+    pub const fn from_static(data: &'static [T], shape: [usize; 2]) -> Self {
+        Self::new_view(BytesView::from_static(data), shape)
+    }
+
+    pub const fn new_view(data: BytesView<T>, shape: [usize; 2]) -> Self {
         Self::Cpu(CpuTensor::new_view(data, shape))
     }
     pub fn new(data: &[impl AsRef<[T]>]) -> Self {
@@ -146,14 +150,8 @@ impl<T: GpuNum> Tensor<T> {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_to(dst),
             (Self::Gpu(src), Self::Gpu(dst)) => src.copy_to(dst),
-            (Self::Gpu(src), Self::Cpu(dst)) => {
-                let src = CpuTensor::from_gpu_tensor(src);
-                src.copy_to(dst);
-            }
-            (Self::Cpu(src), Self::Gpu(dst)) => {
-                let src = src.to_gpu_tensor();
-                src.copy_to(dst);
-            }
+            (Self::Gpu(src), Self::Cpu(dst)) => src.copy_to_cpu(dst),
+            (Self::Cpu(src), Self::Gpu(dst)) => dst.copy_from_cpu(src),
         }
     }
     pub fn copy_from(&mut self, src: &Self) {

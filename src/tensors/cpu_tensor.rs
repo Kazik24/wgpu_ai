@@ -20,7 +20,7 @@ impl<T: GpuNum> CpuTensor<T> {
         let array = src.get_array();
         Self::from_shape(Cow::Owned(array), src.shape())
     }
-    pub fn new_view(data: BytesView<T>, shape: [usize; 2]) -> Self {
+    pub const fn new_view(data: BytesView<T>, shape: [usize; 2]) -> Self {
         assert!(data.len() == shape[0] * shape[1], "data length must be equal to shape[0] * shape[1]");
         assert!(shape[0] * shape[1] > 0, "empty data");
         Self { data, shape }
@@ -77,6 +77,10 @@ impl<T: GpuNum> CpuTensor<T> {
     }
     pub fn get_array(&self) -> &[T] {
         &self.data
+    }
+    /// If tensor is mapped this will create new buffer
+    pub fn get_array_mut(&mut self) -> &mut [T] {
+        &mut self.data
     }
 }
 

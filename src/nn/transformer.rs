@@ -56,19 +56,19 @@ struct TransformerLayer {
     weights_value: Tensor<f32>,  //wv
     weights_output: Tensor<f32>, //wo
 
-    rms_norm_add_unit_offset: bool,     // always false for Llama, true for Gemma
+    rms_norm_add_unit_offset: bool,      // always false for Llama, true for Gemma
     weights_rms_attention: Tensor<bf16>, //w_rms_att [1, token_dim]
 
     // FFN
     weight_rms_mlp: Tensor<bf16>, //w_rms_post_att [1, token_dim]
-    mlp_gate_proj: Tensor<f32>,  //w1
-    mlp_down_proj: Tensor<f32>,  // w2
-    mlp_up_proj: Tensor<f32>,    // w3
+    mlp_gate_proj: Tensor<f32>,   //w1
+    mlp_down_proj: Tensor<f32>,   // w2
+    mlp_up_proj: Tensor<f32>,     // w3
 
-                                 //  w_rms_pre_ffn: Option<Tensor<'a>>,
-                                 //  w_rms_post_ffn: Option<Tensor<'a>>,
+                                  //  w_rms_pre_ffn: Option<Tensor<'a>>,
+                                  //  w_rms_post_ffn: Option<Tensor<'a>>,
 
-                                 //  w_rms_final: Tensor<'a>,
+                                  //  w_rms_final: Tensor<'a>,
 }
 
 impl TransformerLayer {

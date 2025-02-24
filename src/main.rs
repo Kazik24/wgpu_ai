@@ -13,7 +13,7 @@ use elems::Bytes;
 use half::bf16;
 use nn::Stats;
 use rayon::{iter::ParallelIterator, slice::ParallelSlice};
-use safetensors::{tensor, SafeTensors, View};
+use safetensors::{SafeTensors, View, tensor};
 use tensors::{BytesView, GpuTensor};
 
 fn memory_map_file_unchecked(path: &Path) -> Bytes {

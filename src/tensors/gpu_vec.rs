@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, Condvar, Mutex},
 };
 
-use wgpu::{core::device, util::DeviceExt, BufferUsages, CommandEncoderDescriptor, PipelineCompilationOptions, ShaderModuleDescriptor, SubmissionIndex};
+use wgpu::{BufferUsages, CommandEncoderDescriptor, PipelineCompilationOptions, ShaderModuleDescriptor, SubmissionIndex, core::device, util::DeviceExt};
 
 use super::{FlowFunc, GpuNum, WgpuContext};
 
@@ -203,7 +203,10 @@ impl<T: GpuNum> GpuVec<T> {
         staging_buffer.rawr().unmap();
     }
 
-    fn copy_to_cpu(&self, range: impl RangeBounds<usize>, dst: &mut [T]) {
+    pub fn read(&self, dst: &mut [T]) {
+        self.read_range(.., dst)
+    }
+    pub fn read_range(&self, range: impl RangeBounds<usize>, dst: &mut [T]) {
         let range = Self::check_bounds(range, self.len());
         assert!(range.len() == dst.len(), "length of dst slice must match");
         assert!(size_of::<T>() == size_of::<MaybeUninit<T>>());
@@ -285,7 +288,7 @@ mod tests {
             let mut values = gpu_vec.to_cpu(..);
             assert_eq!(data, values);
             values.fill(0.0);
-            gpu_vec.copy_to_cpu(.., &mut values);
+            gpu_vec.read_range(.., &mut values);
             assert_eq!(data, values);
         }
     }

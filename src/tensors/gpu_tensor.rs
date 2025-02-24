@@ -11,9 +11,8 @@ use wgpu::*;
 use crate::tensors::wgpu_context::WgpuContext;
 
 use super::{
-    op, op_inplace,
+    ActivationType, AnyGpuNum, CpuTensor, FlowFunc, GpuNum, GpuVec, NumType, PipelineType, TensorType, op, op_inplace,
     pipelines::{self, WorkgroupSize},
-    ActivationType, AnyGpuNum, FlowFunc, GpuNum, GpuVec, NumType, PipelineType, TensorType,
 };
 
 pub enum AnyGpuTensor {
@@ -170,6 +169,15 @@ impl<T: GpuNum> GpuTensor<T> {
     pub fn copy_to(&self, dst: &mut GpuTensor<T>) {
         assert!(self.shape() == dst.shape(), "tensors must be the same shape");
         self.data.copy_to(&mut dst.data);
+    }
+
+    pub fn copy_to_cpu(&self, dst: &mut CpuTensor<T>) {
+        assert!(self.shape() == dst.shape(), "tensors must be the same shape");
+        self.data.read(dst.get_array_mut());
+    }
+    pub fn copy_from_cpu(&mut self, src: &CpuTensor<T>) {
+        assert!(self.shape() == src.shape(), "tensors must be the same shape");
+        self.data.write(src.get_array());
     }
     pub fn copy_from(&mut self, src: &GpuTensor<T>) {
         src.copy_to(self);

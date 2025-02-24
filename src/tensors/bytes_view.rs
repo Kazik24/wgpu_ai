@@ -16,6 +16,16 @@ enum ViewRepr<T: GpuNum> {
 }
 
 impl<T: GpuNum> BytesView<T> {
+    pub const fn from_static(data: &'static [T]) -> Self {
+        /// SAFETY: T is GpuNum which is sealed and all field patterns are valid in it
+        /// so casting it to bytes is always valid
+        let bytes_len = data.len().checked_mul(size_of::<T>()).expect("overflow");
+        let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), bytes_len) };
+        let bytes = Bytes::from_static(bytes);
+        Self {
+            repr: ViewRepr::Mapped(bytes, data.len()),
+        }
+    }
     pub fn from_slice(data: Box<[T]>) -> Self {
         // struct BoxOwner<T: GpuNum>(Box<[T]>);
         // impl<T: GpuNum> AsRef<[u8]> for BoxOwner<T> {
